@@ -1,9 +1,10 @@
 // Bump VERSION whenever the game changes, so phones pick up the new copy.
-const VERSION = 'swipe-snake-v4';
+const VERSION = 'swipe-snake-v5';
+// cache: 'reload' skips the phone's web cache, so a new version never stores stale files.
 const CORE = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(CORE)));
+  e.waitUntil(caches.open(VERSION).then(c => c.addAll(CORE.map(u => new Request(u, { cache: 'reload' })))));
 });
 
 self.addEventListener('activate', e => {
