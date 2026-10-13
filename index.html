@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Swipe Snake</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Snake">
+<meta name="theme-color" content="#1f2a24">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=VT323&family=Silkscreen&display=swap">
+<style>
+/* Layout: one-screen handheld — score strip, square LCD board, hint line. Deliberately single-theme (LCD look). */
+:root {
+  --case: #1f2a24;
+  --bezel: #121915;
+  --lcd: #a7b98a;
+  --lcd-dim: #97aa7b;
+  --pixel: #26331f;
+  --ink: #d9e4c6;
+  --muted: #8a9a84;
+  --f-display: "Silkscreen", "Courier New", monospace;
+  --f-digits: "VT323", "Courier New", monospace;
+  color-scheme: dark;
+}
+html, body { height: 100%; touch-action: none; }
+body {
+  background: var(--case);
+  color: var(--ink);
+  font-family: var(--f-digits);
+  padding-inline: 16px;
+  overscroll-behavior: none;
+  -webkit-user-select: none; user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.app {
+  height: 100%;
+  max-width: 520px;
+  margin: 0 auto;
+  display: flex; flex-direction: column; justify-content: center;
+  gap: 14px;
+  padding-block: 12px;
+  box-sizing: border-box;
+}
+.top {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-family: var(--f-display);
+  font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
+}
+.top b { font-family: var(--f-digits); font-weight: 400; font-size: 30px; color: var(--ink); letter-spacing: 0; margin-left: 6px; font-variant-numeric: tabular-nums; }
+.bezel {
+  background: var(--bezel);
+  padding: 12px;
+  border-radius: 10px 10px 34px 10px;
+  box-shadow: inset 0 2px 6px rgba(0,0,0,.5);
+}
+#board {
+  position: relative;
+  width: 100%; aspect-ratio: 1; max-width: 100%;
+  touch-action: none;
+}
+canvas { display: block; width: 100%; height: 100%; border-radius: 3px; }
+.overlay {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  color: var(--pixel); text-align: center;
+  pointer-events: none;
+}
+.overlay h1 { font-family: var(--f-display); font-size: 26px; margin: 0; letter-spacing: .04em; text-wrap: balance; }
+.overlay p { font-size: 22px; margin: 0; }
+.hint { text-align: center; font-size: 19px; color: var(--muted); margin: 0; }
+@media (prefers-reduced-motion: reduce) { .blink { animation: none !important; } }
+.blink { animation: blink 1.1s steps(2, start) infinite; }
+@keyframes blink { to { visibility: hidden; } }
+
+html { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); box-sizing: border-box; }
+body { margin: 0; }
+#update {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  background: var(--lcd); color: var(--pixel);
+  font-family: var(--f-display); font-size: 13px; letter-spacing: .06em;
+  border: 0; border-radius: 6px; padding: 12px 18px; cursor: pointer;
+}
+.ver { text-align: center; font-size: 15px; color: var(--muted); margin: 0; opacity: .7; }
+</style>
+
+</head>
+<body>
+<div class="app">
+  <div class="top">
+    <span>Score<b id="score">0</b></span>
+    <span>Best<b id="best">0</b></span>
+  </div>
+  <div class="bezel">
+    <div id="board">
+      <canvas id="c"></canvas>
+      <div class="overlay" id="overlay">
+        <h1 id="ovTitle">SNAKE</h1>
+        <p class="blink" id="ovMsg">Swipe to start</p>
+      </div>
+    </div>
+  </div>
+  <p class="hint">Swipe anywhere on screen · arrow keys work too</p>
+  <p class="ver">v<span id="ver">1</span></p>
+</div>
+<button id="update" hidden>Update ready · tap to reload</button>
+
+<script>
+(() => {
+  const N = 16;                 // grid cells per side
+  const STEP_MS = 140;          // tick speed
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const board = document.getElementById('board');
+  const overlay = document.getElementById('overlay');
+  const ovTitle = document.getElementById('ovTitle');
+  const ovMsg = document.getElementById('ovMsg');
+  const scoreEl = document.getElementById('score');
+  const bestEl = document.getElementById('best');
+  const css = getComputedStyle(document.documentElement);
+  const C = { lcd: css.getPropertyValue('--lcd').trim(), dim: css.getPropertyValue('--lcd-dim').trim(), px: css.getPropertyValue('--pixel').trim() };
+
+  let best = 0;
+  try { best = parseInt(localStorage.getItem('snake-best') || '0', 10) || 0; } catch (e) {}
+  bestEl.textContent = best;
+
+  const DIRS = { up: [0,-1], down: [0,1], left: [-1,0], right: [1,0] };
+  let snake, dir, queue, food, score, state = 'ready', timer = null;
+
+  function reset() {
+    snake = [[7,8],[6,8],[5,8]];
+    dir = 'right'; queue = []; score = 0;
+    scoreEl.textContent = 0;
+    placeFood();
+  }
+  function placeFood() {
+    const taken = new Set(snake.map(([x,y]) => x+','+y));
+    const free = [];
+    for (let y=0;y<N;y++) for (let x=0;x<N;x++) if (!taken.has(x+','+y)) free.push([x,y]);
+    food = free[Math.floor(Math.random()*free.length)];
+  }
+  function isOpposite(a,b){ const A=DIRS[a],B=DIRS[b]; return A[0]===-B[0] && A[1]===-B[1]; }
+
+  function turn(d) {
+    if (state === 'ready' || state === 'over') { start(d); return; }
+    const last = queue.length ? queue[queue.length-1] : dir;
+    if (d === last || isOpposite(d, last)) return;
+    if (queue.length < 2) queue.push(d);
+  }
+
+  function start(d) {
+    reset();
+    if (d && !isOpposite(d, 'right')) dir = d;
+    state = 'playing';
+    overlay.hidden = true;
+    clearInterval(timer);
+    timer = setInterval(tick, STEP_MS);
+    draw();
+  }
+
+  function tick() {
+    if (queue.length) dir = queue.shift();
+    const [dx,dy] = DIRS[dir];
+    const head = [snake[0][0]+dx, snake[0][1]+dy];
+    const eating = head[0]===food[0] && head[1]===food[1];
+    const body = eating ? snake : snake.slice(0,-1);
+    if (head[0]<0||head[1]<0||head[0]>=N||head[1]>=N||body.some(([x,y])=>x===head[0]&&y===head[1])) return gameOver();
+    snake.unshift(head);
+    if (eating) {
+      score++; scoreEl.textContent = score;
+      if (snake.length === N*N) return gameOver(true);
+      placeFood();
+    } else snake.pop();
+    draw();
+  }
+
+  function gameOver(won) {
+    clearInterval(timer); state = 'over';
+    if (score > best) { best = score; bestEl.textContent = best; try { localStorage.setItem('snake-best', best); } catch (e) {} }
+    ovTitle.textContent = won ? 'YOU WIN' : 'GAME OVER';
+    ovMsg.textContent = 'Swipe to play again';
+    overlay.hidden = false;
+    draw();
+  }
+
+  // Rendering
+  let cell = 20, dpr = 1;
+  function resize() {
+    const size = board.clientWidth;
+    dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(size*dpr); canvas.height = Math.round(size*dpr);
+    cell = canvas.width / N;
+    draw();
+  }
+  function block(x,y,inset,color){
+    const p = cell*inset;
+    ctx.fillStyle = color;
+    ctx.fillRect(x*cell+p, y*cell+p, cell-2*p, cell-2*p);
+  }
+  function draw() {
+    ctx.fillStyle = C.lcd; ctx.fillRect(0,0,canvas.width,canvas.height);
+    for (let y=0;y<N;y++) for (let x=0;x<N;x++) block(x,y,0.08,C.dim);  // ghost pixels like an LCD
+    if (!snake) return;
+    if (food) { block(food[0],food[1],0.28,C.px); }
+    snake.forEach(([x,y],i) => block(x,y,i===0?0.04:0.1,C.px));
+    if (state === 'over' || state === 'ready') { ctx.fillStyle = 'rgba(167,185,138,.72)'; ctx.fillRect(0,0,canvas.width,canvas.height); }
+  }
+
+  // Swipe controls: a direction fires as soon as the finger has moved far enough,
+  // and the anchor resets so you can chain turns without lifting your finger.
+  // Swipes register anywhere on screen, except a margin at the edges left for the phone's own gestures.
+  const THRESH = 22;
+  const EDGE = 28;
+  let sx = null, sy = null;
+  function inSafeZone(t) {
+    return t.clientX > EDGE && t.clientX < window.innerWidth - EDGE &&
+           t.clientY > EDGE && t.clientY < window.innerHeight - EDGE;
+  }
+  document.addEventListener('touchstart', e => {
+    const t = e.touches[0];
+    if (!inSafeZone(t)) { sx = sy = null; return; }
+    sx = t.clientX; sy = t.clientY; e.preventDefault();
+  }, { passive: false });
+  document.addEventListener('touchmove', e => {
+    if (sx === null) return;
+    e.preventDefault();
+    const t = e.touches[0], dx = t.clientX - sx, dy = t.clientY - sy;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < THRESH) return;
+    turn(Math.abs(dx) > Math.abs(dy) ? (dx>0?'right':'left') : (dy>0?'down':'up'));
+    sx = t.clientX; sy = t.clientY;
+  }, { passive: false });
+  document.addEventListener('touchend', () => { sx = sy = null; });
+  document.addEventListener('touchcancel', () => { sx = sy = null; });
+
+  // Keyboard for desktop
+  const KEYS = { ArrowUp:'up', ArrowDown:'down', ArrowLeft:'left', ArrowRight:'right', w:'up', s:'down', a:'left', d:'right' };
+  window.addEventListener('keydown', e => { const d = KEYS[e.key]; if (d) { e.preventDefault(); turn(d); } });
+  // Mouse click starts on desktop
+  board.addEventListener('mousedown', () => { if (state !== 'playing') start(); });
+
+  reset(); state = 'ready';
+  window.addEventListener('resize', resize);
+  resize();
+})();
+</script>
+
+<script>
+// Offline support + update banner
+const APP_VERSION = '1';
+document.getElementById('ver').textContent = APP_VERSION;
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', async () => {
+    try {
+      const reg = await navigator.serviceWorker.register('sw.js');
+      const btn = document.getElementById('update');
+      const show = w => { btn.hidden = false; btn.onclick = () => w.postMessage('skipWaiting'); };
+      if (reg.waiting && navigator.serviceWorker.controller) show(reg.waiting);
+      reg.addEventListener('updatefound', () => {
+        const w = reg.installing;
+        w.addEventListener('statechange', () => {
+          if (w.state === 'installed' && navigator.serviceWorker.controller) show(w);
+        });
+      });
+      let reloading = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => { if (!reloading) { reloading = true; location.reload(); } });
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(()=>{}); });
+    } catch (e) {}
+  });
+}
+</script>
+</body>
+</html>
