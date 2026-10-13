@@ -29,6 +29,7 @@
   color-scheme: dark;
 }
 html, body { height: 100%; touch-action: none; }
+[hidden] { display: none !important; }
 body {
   background: var(--case);
   color: var(--ink);
@@ -107,7 +108,7 @@ body { margin: 0; }
     </div>
   </div>
   <p class="hint">Swipe anywhere on screen · arrow keys work too</p>
-  <p class="ver">v<span id="ver">1</span></p>
+  <p class="ver">v<span id="ver">2</span></p>
 </div>
 <button id="update" hidden>Update ready · tap to reload</button>
 
@@ -252,7 +253,7 @@ body { margin: 0; }
 
 <script>
 // Offline support + update banner
-const APP_VERSION = '1';
+const APP_VERSION = '2';
 document.getElementById('ver').textContent = APP_VERSION;
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', async () => {
