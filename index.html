@@ -108,14 +108,18 @@ body { margin: 0; }
     </div>
   </div>
   <p class="hint">Swipe anywhere on screen · arrow keys work too</p>
-  <p class="ver">v<span id="ver">3</span></p>
+  <p class="ver">v<span id="ver">4</span></p>
 </div>
 <button id="update" hidden>Update ready · tap to reload</button>
 
 <script>
 (() => {
   const N = 16;                 // grid cells per side
-  const STEP_MS = 140;          // tick speed
+  const STEP_MS = 140;          // starting tick speed (ms per move)
+  const SPEEDUP_EVERY = 5;      // pickups per speed-up
+  const SPEEDUP_MS = 10;        // ms shaved off each time
+  const MIN_STEP_MS = 60;       // fastest it gets
+  const stepFor = s => Math.max(MIN_STEP_MS, STEP_MS - Math.floor(s / SPEEDUP_EVERY) * SPEEDUP_MS);
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d');
   const board = document.getElementById('board');
@@ -161,7 +165,7 @@ body { margin: 0; }
     state = 'playing';
     overlay.hidden = true;
     clearInterval(timer);
-    timer = setInterval(tick, STEP_MS);
+    timer = setInterval(tick, stepFor(0));
     draw();
   }
 
@@ -175,6 +179,7 @@ body { margin: 0; }
     snake.unshift(head);
     if (eating) {
       score++; scoreEl.textContent = score;
+      if (score % SPEEDUP_EVERY === 0) { clearInterval(timer); timer = setInterval(tick, stepFor(score)); }
       if (snake.length === N*N) return gameOver(true);
       placeFood();
     } else snake.pop();
@@ -253,7 +258,7 @@ body { margin: 0; }
 
 <script>
 // Offline support + update banner
-const APP_VERSION = '3';
+const APP_VERSION = '4';
 document.getElementById('ver').textContent = APP_VERSION;
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', async () => {
