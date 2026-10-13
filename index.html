@@ -108,7 +108,7 @@ body { margin: 0; }
     </div>
   </div>
   <p class="hint">Swipe anywhere on screen · arrow keys work too</p>
-  <p class="ver">v<span id="ver">2</span></p>
+  <p class="ver">v<span id="ver">3</span></p>
 </div>
 <button id="update" hidden>Update ready · tap to reload</button>
 
@@ -253,7 +253,7 @@ body { margin: 0; }
 
 <script>
 // Offline support + update banner
-const APP_VERSION = '2';
+const APP_VERSION = '3';
 document.getElementById('ver').textContent = APP_VERSION;
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', async () => {
@@ -261,13 +261,17 @@ if ('serviceWorker' in navigator) {
       const reg = await navigator.serviceWorker.register('sw.js');
       const btn = document.getElementById('update');
       const show = w => { btn.hidden = false; btn.onclick = () => w.postMessage('skipWaiting'); };
-      if (reg.waiting && navigator.serviceWorker.controller) show(reg.waiting);
-      reg.addEventListener('updatefound', () => {
-        const w = reg.installing;
-        w.addEventListener('statechange', () => {
-          if (w.state === 'installed' && navigator.serviceWorker.controller) show(w);
-        });
-      });
+      // Catch an update whatever stage it's at: already waiting, mid-download, or found later.
+      const track = w => {
+        if (!w) return;
+        const check = () => { if (w.state === 'installed' && navigator.serviceWorker.controller) show(w); };
+        check();
+        w.addEventListener('statechange', check);
+      };
+      track(reg.waiting);
+      track(reg.installing);
+      reg.addEventListener('updatefound', () => track(reg.installing));
+      reg.update().catch(() => {});
       let reloading = false;
       navigator.serviceWorker.addEventListener('controllerchange', () => { if (!reloading) { reloading = true; location.reload(); } });
       document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(()=>{}); });
