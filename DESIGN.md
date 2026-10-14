@@ -2,7 +2,7 @@
 
 The single source of truth for Swipe Snake: what the game is, how the code is laid out, how releases work, and what's planned. Update this file whenever a decision is made or a milestone moves, so any new chat session can pick up from here.
 
-_Last updated: 14 Oct 2026 · Current release: v5 on `main` · v6 (Milestone 1) built on branch `m1`, awaiting a play-test before merging · Next: Milestone 2_
+_Last updated: 14 Oct 2026 · Current release: v6 (Milestone 1) on `main` · Next: Milestone 2_
 
 ---
 
@@ -65,7 +65,7 @@ Classic Snake with:
 - Arrow keys / WASD on desktop.
 - Installable PWA with offline cache and an "Update ready · tap to reload" banner.
 
-**Open check:** the v5 update-flow fix (fresh fetch on install + "Updating…" feedback) hasn't yet been confirmed on the iPhone. Confirm when v6 is merged to `main`.
+**Open check:** the v5 update-flow fix (fresh fetch on install + "Updating…" feedback) hasn't yet been confirmed on the iPhone. Confirm when the phone updates to v6.
 
 v6 also stops the global touch handler swallowing taps on buttons (it now ignores touches that start on a `<button>`), which may have been making the update banner hard to tap.
 
@@ -292,7 +292,7 @@ The current game stays available from the title screen as **Classic**, with its 
 
 Each milestone is a playable release. Tick items as they're done and note the version that shipped them.
 
-### ☐ M1 — Run structure (v6, on branch `m1`)
+### ☑ M1 — Run structure (v6)
 - [x] Code reorganised into the sections in §4.3; seeded RNG; `requestAnimationFrame` loop (v6)
 - [x] Title screen with Run and Classic modes (v6)
 - [x] 9-floor run: food targets, exit tile, length reset per floor, act speeds (v6)
@@ -300,8 +300,8 @@ Each milestone is a playable release. Tick items as they're done and note the ve
 - [x] Results screen (floor reached, run score) (v6)
 - [x] Versioned save data with migration from `snake-best` (v6)
 - [x] Core game feel: bite burst, death shake, Web Audio bleeps, mute toggle (v6)
-- [ ] Play-test v6 on the iPhone (brake feel, audio, button taps), then merge `m1` → `main`
-- [ ] Confirm the v5 update flow works on the iPhone (happens on that merge)
+- [x] Play-test v6 on the iPhone, then merge `m1` → `main` (v6, 14 Oct 2026)
+- [ ] Confirm the v5 update flow works on the iPhone (check when the phone picks up v6 from `main`)
 
 ### ☐ M2 — The draft
 - [ ] Pick-1-of-3 screen between floors
@@ -361,6 +361,7 @@ Each milestone is a playable release. Tick items as they're done and note the ve
 | 14 Oct 2026 | M1: run scoring 10 × act per food, 20 × floor per clear, +100 for a win; classic stays 1 per food so old bests still compare |
 | 14 Oct 2026 | M1: Brake is Run-only; Classic stays pure. An emptied meter locks until 25% refilled |
 | 14 Oct 2026 | M1: M1 work pushed to branch `m1`, merged to `main` only after a phone play-test |
+| 14 Oct 2026 | v6 play-tested successfully and merged to `main` |
 
 ---
 
