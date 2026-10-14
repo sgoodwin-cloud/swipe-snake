@@ -69,7 +69,7 @@ Classic Snake with:
 
 v7 also makes the reload wait for the new worker to report `activated` (plus `controllerchange`), with a 5s timer only as a last resort, instead of a blind 2.5s timer that could reload onto the old page on a slow iPhone.
 
-**Open check:** confirm on the iPhone that the v6 → v7 update applies from the banner tap alone.
+**Confirmed on the iPhone (14 Oct 2026):** the v6 → v7 update applied from the banner tap alone, no force-close needed.
 
 ---
 
@@ -304,7 +304,7 @@ Each milestone is a playable release. Tick items as they're done and note the ve
 - [x] Versioned save data with migration from `snake-best` (v6)
 - [x] Core game feel: bite burst, death shake, Web Audio bleeps, mute toggle (v6)
 - [x] Play-test v6 on the iPhone, then merge `m1` → `main` (v6, 14 Oct 2026)
-- [ ] Confirm the update banner works on the iPhone without a force-close (v6 → v7 is the first update that can)
+- [x] Confirm the update banner works on the iPhone without a force-close (v7)
 
 ### ☐ M2 — The draft
 - [ ] Pick-1-of-3 screen between floors
@@ -366,6 +366,7 @@ Each milestone is a playable release. Tick items as they're done and note the ve
 | 14 Oct 2026 | M1: M1 work pushed to branch `m1`, merged to `main` only after a phone play-test |
 | 14 Oct 2026 | v6 play-tested successfully and merged to `main` |
 | 14 Oct 2026 | v7: update button reloads only once the new worker is active; root cause of dead banner taps traced to v5's touch handler |
+| 14 Oct 2026 | v7 update confirmed working on the iPhone from the banner tap; Milestone 1 complete |
 
 ---
 
