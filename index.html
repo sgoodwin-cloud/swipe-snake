@@ -15,7 +15,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=VT323&family=Silkscreen&display=swap">
 <style>
-/* Layout: one-screen handheld — score strip, square LCD board, hint line. Deliberately single-theme (LCD look). */
+/* Layout: one-screen handheld — HUD strip, square LCD board, brake meter / hint line. Deliberately single-theme (LCD look). */
 :root {
   --case: #1f2a24;
   --bezel: #121915;
@@ -34,7 +34,7 @@ body {
   background: var(--case);
   color: var(--ink);
   font-family: var(--f-digits);
-  padding-inline: 16px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
   overscroll-behavior: none;
   -webkit-user-select: none; user-select: none;
   -webkit-tap-highlight-color: transparent;
@@ -49,11 +49,13 @@ body {
   box-sizing: border-box;
 }
 .top {
-  display: flex; justify-content: space-between; align-items: baseline;
+  display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
   font-family: var(--f-display);
-  font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
+  font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
+  min-height: 34px;
 }
-.top b { font-family: var(--f-digits); font-weight: 400; font-size: 30px; color: var(--ink); letter-spacing: 0; margin-left: 6px; font-variant-numeric: tabular-nums; }
+.top span { white-space: nowrap; }
+.top b { font-family: var(--f-digits); font-weight: 400; font-size: 28px; color: var(--ink); letter-spacing: 0; margin-left: 6px; font-variant-numeric: tabular-nums; }
 .bezel {
   background: var(--bezel);
   padding: 12px;
@@ -71,10 +73,28 @@ canvas { display: block; width: 100%; height: 100%; border-radius: 3px; }
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
   color: var(--pixel); text-align: center;
   pointer-events: none;
+  padding: 12px; box-sizing: border-box;
 }
 .overlay h1 { font-family: var(--f-display); font-size: 26px; margin: 0; letter-spacing: .04em; text-wrap: balance; }
 .overlay p { font-size: 22px; margin: 0; }
+.overlay .sub { font-size: 20px; opacity: .85; }
+.menu { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 10px; pointer-events: auto; max-width: 260px; }
+.menu:empty { display: none; }
+.menu button {
+  font-family: var(--f-display); font-size: 14px; letter-spacing: .06em; text-transform: uppercase;
+  background: var(--pixel); color: var(--lcd);
+  border: 2px solid var(--pixel); border-radius: 4px;
+  padding: 11px 14px; min-width: 112px; cursor: pointer;
+}
+.menu button.ghost { background: transparent; color: var(--pixel); }
+.menu button.wide { flex-basis: 100%; }
+.under { display: flex; justify-content: center; align-items: center; gap: 10px; min-height: 24px; }
 .hint { text-align: center; font-size: 19px; color: var(--muted); margin: 0; }
+.meter { display: flex; align-items: center; gap: 8px; font-family: var(--f-display); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.segs { display: flex; gap: 3px; }
+.segs i { width: 12px; height: 14px; background: var(--bezel); border-radius: 1px; }
+.segs i.on { background: var(--lcd); }
+.meter.empty .segs i.on { background: var(--muted); }
 @media (prefers-reduced-motion: reduce) { .blink { animation: none !important; } }
 .blink { animation: blink 1.1s steps(2, start) infinite; }
 @keyframes blink { to { visibility: hidden; } }
@@ -94,171 +114,616 @@ body { margin: 0; }
 </head>
 <body>
 <div class="app">
-  <div class="top">
-    <span>Score<b id="score">0</b></span>
-    <span>Best<b id="best">0</b></span>
-  </div>
+  <div class="top" id="hud"></div>
   <div class="bezel">
     <div id="board">
       <canvas id="c"></canvas>
       <div class="overlay" id="overlay">
         <h1 id="ovTitle">SNAKE</h1>
-        <p class="blink" id="ovMsg">Swipe to start</p>
+        <div id="ovLines"></div>
+        <p class="blink" id="ovMsg"></p>
+        <div class="menu" id="ovMenu"></div>
       </div>
     </div>
   </div>
-  <p class="hint">Swipe anywhere on screen · arrow keys work too</p>
-  <p class="ver">v<span id="ver">5</span></p>
+  <div class="under">
+    <div class="meter" id="meter" hidden><span>Brake</span><div class="segs" id="segs"></div></div>
+    <p class="hint" id="hint">Swipe to steer · hold to brake</p>
+  </div>
+  <p class="ver">v<span id="ver">6</span></p>
 </div>
 <button id="update" hidden>Update ready · tap to reload</button>
 
 <script>
 (() => {
-  const N = 16;                 // grid cells per side
-  const STEP_MS = 140;          // starting tick speed (ms per move)
-  const SPEEDUP_EVERY = 5;      // pickups per speed-up
-  const SPEEDUP_MS = 10;        // ms shaved off each time
-  const MIN_STEP_MS = 60;       // fastest it gets
-  const stepFor = s => Math.max(MIN_STEP_MS, STEP_MS - Math.floor(s / SPEEDUP_EVERY) * SPEEDUP_MS);
-  const canvas = document.getElementById('c');
-  const ctx = canvas.getContext('2d');
-  const board = document.getElementById('board');
-  const overlay = document.getElementById('overlay');
-  const ovTitle = document.getElementById('ovTitle');
-  const ovMsg = document.getElementById('ovMsg');
-  const scoreEl = document.getElementById('score');
-  const bestEl = document.getElementById('best');
+  'use strict';
+
+  /* ====================================================================
+   * 1. CONFIG & TUNING — every gameplay number lives here
+   * ==================================================================== */
+  const N = 16;                       // grid cells per side
+  const CFG = {
+    run: {
+      floors: 9, floorsPerAct: 3,
+      targets: [6, 8, 10],            // food to open the exit, per act
+      actStepMs: [160, 145, 130],     // ms per move, per act
+      startLength: 3,
+      foodPoints: 10,                 // × act number
+      clearBonus: 20,                 // × floor number
+      winBonus: 100,
+      clearPauseMs: 650,              // jingle time before the next floor
+    },
+    classic: { stepMs: 140, speedupEvery: 5, speedupMs: 10, minStepMs: 60 },
+    brake: {
+      holdMs: 250,                    // finger still this long = brake
+      stillPx: 10,                    // how far the finger can drift and still count as "still"
+      timeScale: 0.5,
+      maxMs: 3000,                    // seconds of braking from full
+      refillMs: 6000,                 // empty → full when not braking
+      resumeAt: 0.25,                 // once emptied, usable again at this fraction
+      segments: 12,
+    },
+    swipe: { thresh: 22, edge: 28 },
+    queueMax: 2,
+    fx: { burstCount: 8, burstMs: 380, shakeMs: 450, shakeCells: 0.35, deathMs: 750, exitSweepMs: 450 },
+    inputLockMs: 600,                 // ignore buttons/swipes briefly after a game ends
+  };
+  const DIRS = { up: [0,-1], down: [0,1], left: [-1,0], right: [1,0] };
+  const actOf = floor => Math.ceil(floor / CFG.run.floorsPerAct);
+
+  /* ====================================================================
+   * 2. RNG — seeded, so every run is reproducible (daily challenge later)
+   *    Game decisions use the board's rng; cosmetic effects use Math.random.
+   * ==================================================================== */
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      let t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+  const newSeed = () => (Math.random() * 4294967296) >>> 0;
+  const pick = (rng, arr) => arr[Math.floor(rng() * arr.length)];
+
+  /* ====================================================================
+   * 3. SAVE SYSTEM — one versioned JSON object under one key
+   * ==================================================================== */
+  const SAVE_KEY = 'swipe-snake-save';
+  const SAVE_VERSION = 1;
+  const isObj = o => o && typeof o === 'object' && !Array.isArray(o);
+  function defaultSave() {
+    return {
+      v: SAVE_VERSION, bits: 0,
+      unlocked: { palettes: ['lcd'], music: [], effects: [], skins: ['classic'], mutations: [], perks: [] },
+      equipped: { palette: 'lcd', music: null, effects: [], skin: 'classic', perk: null },
+      overclock: { max: 0, selected: 0 },
+      achievements: {},
+      stats: { runs: 0, wins: 0, bestFloor: 0, bestRunScore: 0, classicBest: 0 },
+      settings: { sound: true },
+    };
+  }
+  function migrate(d) {
+    // Version steps go here as the format changes, e.g. if (d.v === 1) { …; d.v = 2; }
+    const base = defaultSave();
+    for (const k in base) {
+      if (d[k] === undefined) d[k] = base[k];
+      else if (isObj(base[k]) && isObj(d[k])) for (const k2 in base[k]) if (d[k][k2] === undefined) d[k][k2] = base[k][k2];
+    }
+    return d;
+  }
+  function loadSave() {
+    let d = null;
+    try { const raw = localStorage.getItem(SAVE_KEY); if (raw) d = JSON.parse(raw); } catch (e) { d = null; }
+    if (!isObj(d)) {
+      d = defaultSave();
+      // v5 and earlier kept only the classic best score
+      try { const old = parseInt(localStorage.getItem('snake-best') || '0', 10); if (old > 0) d.stats.classicBest = old; } catch (e) {}
+    }
+    return migrate(d);
+  }
+  function writeSave() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (e) {} }
+  const save = loadSave();
+  writeSave();
+
+  /* ====================================================================
+   * DOM handles
+   * ==================================================================== */
+  const $ = id => document.getElementById(id);
+  const canvas = $('c'), ctx = canvas.getContext('2d'), board = $('board');
+  const overlay = $('overlay'), ovTitle = $('ovTitle'), ovLines = $('ovLines'), ovMsg = $('ovMsg'), ovMenu = $('ovMenu');
+  const hudEl = $('hud'), meterEl = $('meter'), segsEl = $('segs'), hintEl = $('hint');
   const css = getComputedStyle(document.documentElement);
   const C = { lcd: css.getPropertyValue('--lcd').trim(), dim: css.getPropertyValue('--lcd-dim').trim(), px: css.getPropertyValue('--pixel').trim() };
 
-  let best = 0;
-  try { best = parseInt(localStorage.getItem('snake-best') || '0', 10) || 0; } catch (e) {}
-  bestEl.textContent = best;
-
-  const DIRS = { up: [0,-1], down: [0,1], left: [-1,0], right: [1,0] };
-  let snake, dir, queue, food, score, state = 'ready', timer = null;
-
-  function reset() {
-    snake = [[7,8],[6,8],[5,8]];
-    dir = 'right'; queue = []; score = 0;
-    scoreEl.textContent = 0;
-    placeFood();
+  function setHud(items) {
+    hudEl.replaceChildren(...items.map(([label, value]) => {
+      const s = document.createElement('span'); s.textContent = label;
+      const b = document.createElement('b'); b.textContent = value; s.append(b); return s;
+    }));
   }
-  function placeFood() {
-    const taken = new Set(snake.map(([x,y]) => x+','+y));
-    const free = [];
-    for (let y=0;y<N;y++) for (let x=0;x<N;x++) if (!taken.has(x+','+y)) free.push([x,y]);
-    food = free[Math.floor(Math.random()*free.length)];
-  }
-  function isOpposite(a,b){ const A=DIRS[a],B=DIRS[b]; return A[0]===-B[0] && A[1]===-B[1]; }
-
-  function turn(d) {
-    if (state === 'ready' || state === 'over') { start(d); return; }
-    const last = queue.length ? queue[queue.length-1] : dir;
-    if (d === last || isOpposite(d, last)) return;
-    if (queue.length < 2) queue.push(d);
-  }
-
-  function start(d) {
-    reset();
-    if (d && !isOpposite(d, 'right')) dir = d;
-    state = 'playing';
-    overlay.hidden = true;
-    clearInterval(timer);
-    timer = setInterval(tick, stepFor(0));
-    draw();
-  }
-
-  function tick() {
-    if (queue.length) dir = queue.shift();
-    const [dx,dy] = DIRS[dir];
-    const head = [snake[0][0]+dx, snake[0][1]+dy];
-    const eating = head[0]===food[0] && head[1]===food[1];
-    const body = eating ? snake : snake.slice(0,-1);
-    if (head[0]<0||head[1]<0||head[0]>=N||head[1]>=N||body.some(([x,y])=>x===head[0]&&y===head[1])) return gameOver();
-    snake.unshift(head);
-    if (eating) {
-      score++; scoreEl.textContent = score;
-      if (score % SPEEDUP_EVERY === 0) { clearInterval(timer); timer = setInterval(tick, stepFor(score)); }
-      if (snake.length === N*N) return gameOver(true);
-      placeFood();
-    } else snake.pop();
-    draw();
-  }
-
-  function gameOver(won) {
-    clearInterval(timer); state = 'over';
-    if (score > best) { best = score; bestEl.textContent = best; try { localStorage.setItem('snake-best', best); } catch (e) {} }
-    ovTitle.textContent = won ? 'YOU WIN' : 'GAME OVER';
-    ovMsg.textContent = 'Swipe to play again';
+  // showOverlay(null) hides it. buttons: [{label, fn, cls}]
+  function showOverlay(o) {
+    if (!o) { overlay.hidden = true; return; }
+    ovTitle.textContent = o.title || '';
+    ovLines.replaceChildren(...(o.lines || []).map(t => { const p = document.createElement('p'); p.className = 'sub'; p.textContent = t; return p; }));
+    ovMsg.textContent = o.blink || ''; ovMsg.hidden = !o.blink;
+    ovMenu.replaceChildren(...(o.buttons || []).map(b => {
+      const el = document.createElement('button'); el.textContent = b.label; if (b.cls) el.className = b.cls;
+      el.addEventListener('click', () => { if (performance.now() - screenAt < (b.lock ? CFG.inputLockMs : 0)) return; el.blur(); Audio.unlock(); Audio.click(); b.fn(); });
+      return el;
+    }));
     overlay.hidden = false;
-    draw();
+  }
+  function setUnder(mode) { meterEl.hidden = mode !== 'meter'; hintEl.hidden = mode === 'meter'; if (typeof mode === 'string' && mode !== 'meter') hintEl.textContent = mode; }
+  for (let i = 0; i < CFG.brake.segments; i++) segsEl.append(document.createElement('i'));
+
+  /* ====================================================================
+   * 9. AUDIO — tiny Web Audio synth (needs a tap before iOS will play)
+   * ==================================================================== */
+  const Audio = (() => {
+    let ac = null;
+    function unlock() {
+      if (!ac) {
+        const A = window.AudioContext || window.webkitAudioContext; if (!A) return;
+        try { ac = new A(); } catch (e) { return; }
+        try { const b = ac.createBuffer(1, 1, 22050), s = ac.createBufferSource(); s.buffer = b; s.connect(ac.destination); s.start(0); } catch (e) {}
+      }
+      if (ac.state === 'suspended') ac.resume().catch(() => {});
+    }
+    function tone(freq, dur, { type = 'square', vol = 0.06, slide = 0, delay = 0 } = {}) {
+      if (!ac || !save.settings.sound) return;
+      const t0 = ac.currentTime + delay, f = freq * (Brake.active() ? 0.78 : 1);
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.type = type; o.frequency.setValueAtTime(f, t0);
+      if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, f * slide), t0 + dur);
+      g.gain.setValueAtTime(vol, t0); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      o.connect(g); g.connect(ac.destination); o.start(t0); o.stop(t0 + dur + 0.02);
+    }
+    const seq = (notes, gap, opts) => notes.forEach((f, i) => tone(f, gap * 1.3, { ...opts, delay: i * gap }));
+    return {
+      unlock,
+      click: () => tone(520, 0.04, { vol: 0.04 }),
+      bite:  () => { tone(660, 0.06); tone(990, 0.06, { delay: 0.045 }); },
+      brake: () => tone(170, 0.09, { type: 'triangle', vol: 0.09 }),
+      exit:  () => seq([523, 659, 784], 0.07, { vol: 0.05 }),
+      clear: () => seq([523, 659, 784, 1047], 0.08, { vol: 0.06 }),
+      win:   () => seq([523, 659, 784, 1047, 784, 1047, 1319], 0.1, { vol: 0.06 }),
+      death: () => { tone(220, 0.35, { type: 'sawtooth', vol: 0.07, slide: 0.3 }); tone(110, 0.4, { vol: 0.05, slide: 0.5, delay: 0.05 }); },
+    };
+  })();
+
+  /* ====================================================================
+   * 5. RUN MODEL & BOARD MODEL
+   *    run   = the whole 9-floor attempt (score, mutations, seed)
+   *    board = one floor or one classic game (snake, food, exit)
+   * ==================================================================== */
+  let run = null;     // null outside Run mode
+  let game = null;    // the board currently in play
+
+  function newRun() {
+    const seed = newSeed();
+    return { seed, rng: mulberry32(seed), floor: 1, score: 0, mutations: [], brakeMaxMs: CFG.brake.maxMs };
   }
 
-  // Rendering
-  let cell = 20, dpr = 1;
+  function newBoard(mode) {
+    const len = CFG.run.startLength;
+    const g = {
+      mode, phase: 'ready',
+      rng: mode === 'run' ? mulberry32((run.rng() * 4294967296) >>> 0) : mulberry32(newSeed()),
+      snake: Array.from({ length: len }, (_, i) => [7 - i, 8]),
+      dir: 'right', queue: [], food: null, exit: null, eaten: 0, score: 0, acc: 0, phaseAt: 0,
+    };
+    if (mode === 'run') {
+      const act = actOf(run.floor);
+      g.target = CFG.run.targets[act - 1];
+      g.stepMs = CFG.run.actStepMs[act - 1];
+    } else g.stepMs = CFG.classic.stepMs;
+    game = g;
+    placeFood();
+    return g;
+  }
+
+  const key = (x, y) => x + ',' + y;
+  function freeCells() {
+    const taken = new Set(game.snake.map(([x, y]) => key(x, y)));
+    if (game.food) taken.add(key(...game.food));
+    if (game.exit) taken.add(key(...game.exit));
+    const free = [];
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if (!taken.has(key(x, y))) free.push([x, y]);
+    return free;
+  }
+  function placeFood() { game.food = null; const free = freeCells(); game.food = free.length ? pick(game.rng, free) : null; }
+  function openExit() {
+    const [hx, hy] = game.snake[0];
+    const free = freeCells();
+    const far = free.filter(([x, y]) => Math.abs(x - hx) + Math.abs(y - hy) >= 5);
+    game.exit = pick(game.rng, far.length ? far : free);
+    FX.sweep(game.exit);
+    Audio.exit();
+  }
+
+  const isOpposite = (a, b) => DIRS[a][0] === -DIRS[b][0] && DIRS[a][1] === -DIRS[b][1];
+  function steer(d) {
+    const last = game.queue.length ? game.queue[game.queue.length - 1] : game.dir;
+    if (d === last || isOpposite(d, last)) return;
+    if (game.queue.length < CFG.queueMax) game.queue.push(d);
+  }
+  function startBoard(d) {
+    if (d && !isOpposite(d, game.dir)) game.dir = d;
+    game.phase = 'playing'; game.acc = 0;
+    showOverlay(null);
+  }
+
+  // One grid move. Returns false when the board stops (death, clear).
+  function step() {
+    if (game.queue.length) game.dir = game.queue.shift();
+    const [dx, dy] = DIRS[game.dir];
+    const head = [game.snake[0][0] + dx, game.snake[0][1] + dy];
+    const eating = game.food && head[0] === game.food[0] && head[1] === game.food[1];
+    const body = eating ? game.snake : game.snake.slice(0, -1);
+    if (head[0] < 0 || head[1] < 0 || head[0] >= N || head[1] >= N || body.some(([x, y]) => x === head[0] && y === head[1])) { die(); return false; }
+    game.snake.unshift(head);
+    if (game.exit && head[0] === game.exit[0] && head[1] === game.exit[1]) { game.snake.pop(); clearFloor(); return false; }
+    if (eating) {
+      eat();
+      if (game.snake.length === N * N) { die(true); return false; }
+    } else game.snake.pop();
+    return true;
+  }
+
+  function eat() {
+    FX.burst(game.food); Audio.bite();
+    if (game.mode === 'run') {
+      game.eaten++;
+      run.score += CFG.run.foodPoints * actOf(run.floor);
+      if (game.eaten === game.target) { placeFood(); openExit(); }
+      else placeFood();
+    } else {
+      game.score++;
+      const c = CFG.classic;
+      if (game.score % c.speedupEvery === 0) game.stepMs = Math.max(c.minStepMs, c.stepMs - Math.floor(game.score / c.speedupEvery) * c.speedupMs);
+      placeFood();
+    }
+    screen.hud();
+  }
+
+  function die(won) {
+    game.phase = 'dying'; game.phaseAt = performance.now(); game.won = !!won;
+    if (won) Audio.win(); else { Audio.death(); FX.shake(); }
+  }
+
+  function clearFloor() {
+    game.phase = 'cleared'; game.phaseAt = performance.now();
+    game.bonus = CFG.run.clearBonus * run.floor;
+    run.score += game.bonus;
+    Audio.clear(); screen.hud();
+  }
+
+  function endRun(won) {
+    if (won) run.score += CFG.run.winBonus;
+    const st = save.stats;
+    st.runs++; if (won) st.wins++;
+    st.bestFloor = Math.max(st.bestFloor, run.floor);
+    const newBest = run.score > st.bestRunScore;
+    st.bestRunScore = Math.max(st.bestRunScore, run.score);
+    writeSave();
+    setScreen('results', { won, floor: run.floor, score: run.score, newBest });
+  }
+
+  /* ====================================================================
+   * BRAKE — hold-to-slow with a meter (Run mode only)
+   * ==================================================================== */
+  const Brake = {
+    held: false, meter: CFG.brake.maxMs, max: CFG.brake.maxMs, exhausted: false, was: false, shown: -1,
+    reset(max) { this.max = max; this.meter = max; this.exhausted = false; this.shown = -1; },
+    active() { return this.held && !this.exhausted && game && game.mode === 'run' && game.phase === 'playing'; },
+    update(dt) {
+      const b = CFG.brake;
+      const on = this.active();
+      if (on) { this.meter -= dt; if (this.meter <= 0) { this.meter = 0; this.exhausted = true; } }
+      else {
+        this.meter = Math.min(this.max, this.meter + dt * this.max / b.refillMs);
+        if (this.exhausted && this.meter >= this.max * b.resumeAt) this.exhausted = false;
+      }
+      if (on && !this.was) Audio.brake();
+      this.was = on;
+      // meter UI (only touch the DOM when a segment changes)
+      const lit = Math.ceil(this.meter / this.max * b.segments) + (this.exhausted ? 100 : 0);
+      if (lit !== this.shown) {
+        this.shown = lit;
+        const n = lit % 100;
+        [...segsEl.children].forEach((el, i) => el.classList.toggle('on', i < n));
+        meterEl.classList.toggle('empty', this.exhausted);
+      }
+    },
+  };
+
+  /* ====================================================================
+   * 8. RENDERING — canvas, particles, screen shake
+   * ==================================================================== */
+  let cell = 20, bg = null;
   function resize() {
-    const size = board.clientWidth;
-    dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(size*dpr); canvas.height = Math.round(size*dpr);
+    const size = board.clientWidth, dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(size * dpr); canvas.height = Math.round(size * dpr);
     cell = canvas.width / N;
-    draw();
+    // pre-render the LCD with its ghost pixels
+    bg = document.createElement('canvas'); bg.width = canvas.width; bg.height = canvas.height;
+    const b = bg.getContext('2d');
+    b.fillStyle = C.lcd; b.fillRect(0, 0, bg.width, bg.height);
+    b.fillStyle = C.dim;
+    const p = cell * 0.08;
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) b.fillRect(x * cell + p, y * cell + p, cell - 2 * p, cell - 2 * p);
   }
-  function block(x,y,inset,color){
-    const p = cell*inset;
+  function block(x, y, inset, color) {
+    const p = cell * inset;
     ctx.fillStyle = color;
-    ctx.fillRect(x*cell+p, y*cell+p, cell-2*p, cell-2*p);
+    ctx.fillRect(x * cell + p, y * cell + p, cell - 2 * p, cell - 2 * p);
   }
-  function draw() {
-    ctx.fillStyle = C.lcd; ctx.fillRect(0,0,canvas.width,canvas.height);
-    for (let y=0;y<N;y++) for (let x=0;x<N;x++) block(x,y,0.08,C.dim);  // ghost pixels like an LCD
-    if (!snake) return;
-    if (food) { block(food[0],food[1],0.28,C.px); }
-    snake.forEach(([x,y],i) => block(x,y,i===0?0.04:0.1,C.px));
-    if (state === 'over' || state === 'ready') { ctx.fillStyle = 'rgba(167,185,138,.72)'; ctx.fillRect(0,0,canvas.width,canvas.height); }
+  function frameCell(x, y, inset, w) {
+    const p = cell * inset, s = cell - 2 * p, t = cell * w;
+    ctx.fillStyle = C.px;
+    ctx.fillRect(x * cell + p, y * cell + p, s, t); ctx.fillRect(x * cell + p, y * cell + p + s - t, s, t);
+    ctx.fillRect(x * cell + p, y * cell + p, t, s); ctx.fillRect(x * cell + p + s - t, y * cell + p, t, s);
   }
 
-  // Swipe controls: a direction fires as soon as the finger has moved far enough,
-  // and the anchor resets so you can chain turns without lifting your finger.
-  // Swipes register anywhere on screen, except a margin at the edges left for the phone's own gestures.
-  const THRESH = 22;
-  const EDGE = 28;
-  let sx = null, sy = null;
+  const FX = {
+    parts: [], shakeAt: -1e9, sweeps: [],
+    burst([x, y]) {
+      const now = performance.now();
+      for (let i = 0; i < CFG.fx.burstCount; i++) {
+        const a = (i / CFG.fx.burstCount) * Math.PI * 2 + Math.random() * 0.6, v = 2.2 + Math.random() * 1.6;
+        this.parts.push({ x: x + 0.5, y: y + 0.5, vx: Math.cos(a) * v, vy: Math.sin(a) * v, born: now });
+      }
+    },
+    shake() { this.shakeAt = performance.now(); },
+    sweep(c) { this.sweeps.push({ c, born: performance.now() }); },
+    clear() { this.parts = []; this.sweeps = []; this.shakeAt = -1e9; },
+    draw(now) {
+      const f = CFG.fx;
+      this.parts = this.parts.filter(p => now - p.born < f.burstMs);
+      ctx.fillStyle = C.px;
+      for (const p of this.parts) {
+        const t = (now - p.born) / 1000, s = cell * 0.2 * (1 - (now - p.born) / f.burstMs);
+        ctx.fillRect((p.x + p.vx * t) * cell - s / 2, (p.y + p.vy * t) * cell - s / 2, s, s);
+      }
+      this.sweeps = this.sweeps.filter(s => now - s.born < f.exitSweepMs);
+      ctx.strokeStyle = C.px; ctx.lineWidth = cell * 0.12;
+      for (const s of this.sweeps) {
+        const k = (now - s.born) / f.exitSweepMs, r = (0.5 + k * 3.5) * cell, cx = (s.c[0] + 0.5) * cell, cy = (s.c[1] + 0.5) * cell;
+        ctx.globalAlpha = 1 - k; ctx.strokeRect(cx - r, cy - r, r * 2, r * 2); ctx.globalAlpha = 1;
+      }
+    },
+    offset(now) {
+      const k = 1 - (now - this.shakeAt) / CFG.fx.shakeMs;
+      if (k <= 0) return [0, 0];
+      const m = CFG.fx.shakeCells * cell * k;
+      return [(Math.random() * 2 - 1) * m, (Math.random() * 2 - 1) * m];
+    },
+  };
+
+  function draw(now) {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(bg, 0, 0);
+    const [ox, oy] = FX.offset(now);
+    ctx.translate(ox, oy);
+    if (game && screen.board) {
+      if (game.exit) {
+        const on = game.phase === 'cleared' ? Math.floor(now / 80) % 2 === 0 : Math.floor(now / 300) % 2 === 0;
+        frameCell(game.exit[0], game.exit[1], 0.06, 0.16);
+        if (on) block(game.exit[0], game.exit[1], 0.34, C.px);
+      }
+      if (game.food) block(game.food[0], game.food[1], 0.28, C.px);
+      const flashing = game.phase === 'dying' && !game.won && Math.floor((now - game.phaseAt) / 90) % 2 === 1;
+      if (!flashing) game.snake.forEach(([x, y], i) => block(x, y, i === 0 ? 0.04 : 0.1, C.px));
+    }
+    FX.draw(now);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (Brake.active()) { ctx.fillStyle = 'rgba(38,51,31,.10)'; ctx.fillRect(0, 0, canvas.width, canvas.height); }
+    if (!overlay.hidden) { ctx.fillStyle = 'rgba(167,185,138,.74)'; ctx.fillRect(0, 0, canvas.width, canvas.height); }
+  }
+
+  /* ====================================================================
+   * 4. SCREEN STATE MACHINE
+   *    title → play(run, floor 1) → play(floor 2) … → results → title
+   *    title → play(classic)
+   *    (Milestone 2 slots the draft screen in between floors.)
+   * ==================================================================== */
+  let screen = null, screenName = '', screenAt = 0;
+  function setScreen(name, data) {
+    screenName = name; screen = SCREENS[name]; screenAt = performance.now();
+    screen.enter(data || {});
+  }
+
+  function soundButton() {
+    return { label: 'Sound: ' + (save.settings.sound ? 'On' : 'Off'), cls: 'ghost wide', fn: toggleSound };
+  }
+  function toggleSound() {
+    save.settings.sound = !save.settings.sound; writeSave();
+    if (screenName === 'title') screen.enter({});
+  }
+  function beginRun() { run = newRun(); setScreen('play', { mode: 'run' }); }
+  function beginClassic() { run = null; setScreen('play', { mode: 'classic' }); }
+
+  const SCREENS = {
+    title: {
+      board: false,
+      enter() {
+        game = null; run = null; FX.clear();
+        const st = save.stats;
+        this.hud = () => setHud([['Runs', st.runs], ['Best fl', st.bestFloor], ['Classic', st.classicBest]]);
+        this.hud();
+        setUnder('Swipe to steer · hold to brake');
+        showOverlay({
+          title: 'SNAKE', lines: ['Nine floors. One snake.'],
+          buttons: [{ label: 'Run', fn: beginRun }, { label: 'Classic', fn: beginClassic, cls: 'ghost' }, soundButton()],
+        });
+      },
+      update() {},
+      input(a) { if (a === 'run') beginRun(); else if (a === 'classic') beginClassic(); else if (a === 'mute') toggleSound(); },
+    },
+
+    play: {
+      board: true,
+      enter(d) {
+        FX.clear();
+        newBoard(d.mode);
+        if (d.mode === 'run') {
+          Brake.reset(run.brakeMaxMs);
+          this.hud = () => setHud([['Score', run.score], ['Floor', run.floor + '/' + CFG.run.floors], ['Food', Math.min(game.eaten, game.target) + '/' + game.target]]);
+          setUnder('meter');
+          const act = actOf(run.floor);
+          const lines = [];
+          if (d.cleared) lines.push('Floor ' + d.cleared + ' clear  +' + d.bonus);
+          lines.push('Act ' + act + ' · eat ' + game.target + ', then exit');
+          showOverlay({ title: 'FLOOR ' + run.floor, lines, blink: 'Swipe to start', buttons: [{ label: 'Abandon run', cls: 'ghost', fn: () => endRun(false) }] });
+        } else {
+          this.hud = () => setHud([['Score', game.score], ['Best', save.stats.classicBest]]);
+          setUnder('Swipe anywhere on screen · arrow keys work too');
+          showOverlay({ title: 'CLASSIC', blink: 'Swipe to start', buttons: [{ label: 'Menu', cls: 'ghost', fn: () => setScreen('title') }] });
+        }
+        this.hud();
+      },
+      update(dt, now) {
+        Brake.update(dt);
+        if (game.phase === 'playing') {
+          game.acc += dt * (Brake.active() ? CFG.brake.timeScale : 1);
+          while (game.acc >= game.stepMs && game.phase === 'playing') { game.acc -= game.stepMs; if (!step()) break; }
+        } else if (game.phase === 'dying' && now - game.phaseAt >= CFG.fx.deathMs) {
+          if (game.mode === 'run') endRun(false); else this.classicOver();
+        } else if (game.phase === 'cleared' && now - game.phaseAt >= CFG.run.clearPauseMs) {
+          if (run.floor >= CFG.run.floors) endRun(true);
+          else { const cleared = run.floor, bonus = game.bonus; run.floor++; setScreen('play', { mode: 'run', cleared, bonus }); }
+        }
+      },
+      classicOver() {
+        game.phase = 'over'; screenAt = performance.now();
+        const st = save.stats, newBest = game.score > st.classicBest;
+        if (newBest) { st.classicBest = game.score; writeSave(); }
+        this.hud();
+        showOverlay({
+          title: game.won ? 'YOU WIN' : 'GAME OVER',
+          lines: ['Score ' + game.score + (newBest && game.score > 0 ? ' · new best!' : '')],
+          blink: 'Swipe to play again',
+          buttons: [{ label: 'Menu', cls: 'ghost', fn: () => setScreen('title'), lock: true }],
+        });
+      },
+      input(a, d) {
+        if (a === 'dir') {
+          if (game.phase === 'ready') startBoard(d);
+          else if (game.phase === 'playing') steer(d);
+          else if (game.phase === 'over' && performance.now() - screenAt > CFG.inputLockMs) { setScreen('play', { mode: 'classic' }); startBoard(d); }
+        } else if (a === 'go') {
+          if (game.phase === 'ready') startBoard();
+        } else if (a === 'menu') {
+          if (game.mode === 'classic') setScreen('title');
+        }
+      },
+    },
+
+    results: {
+      board: true,
+      enter(d) {
+        game.phase = 'over';
+        const st = save.stats;
+        this.hud = () => setHud([['Score', d.score], ['Best', st.bestRunScore]]);
+        this.hud();
+        setUnder('Runs ' + st.runs + ' · wins ' + st.wins);
+        const lines = d.won ? ['All 9 floors cleared'] : ['Fell on floor ' + d.floor + ' · act ' + actOf(d.floor)];
+        lines.push('Score ' + d.score + (d.newBest ? ' · new best!' : ''));
+        showOverlay({
+          title: d.won ? 'YOU WIN' : 'RUN OVER', lines,
+          buttons: [{ label: 'Run again', fn: beginRun, lock: true }, { label: 'Menu', cls: 'ghost', fn: () => setScreen('title'), lock: true }],
+        });
+      },
+      update() {},
+      input(a) {
+        if (performance.now() - screenAt < CFG.inputLockMs) return;
+        if (a === 'run' || a === 'go') beginRun(); else if (a === 'menu') setScreen('title');
+      },
+    },
+  };
+
+  /* ====================================================================
+   * 10. INPUT — swipe, hold-to-brake, keyboard
+   * ==================================================================== */
+  const send = (a, d) => screen.input(a, d);
+
+  // Swipe: a direction fires as soon as the finger has moved far enough, and the
+  // anchor resets so turns chain without lifting. Holding still brakes; swiping
+  // while braking still steers. Edges are left to the phone's own gestures.
+  const T = { active: false, sx: 0, sy: 0, hx: 0, hy: 0, stillSince: 0 };
   function inSafeZone(t) {
-    return t.clientX > EDGE && t.clientX < window.innerWidth - EDGE &&
-           t.clientY > EDGE && t.clientY < window.innerHeight - EDGE;
+    const e = CFG.swipe.edge;
+    return t.clientX > e && t.clientX < window.innerWidth - e && t.clientY > e && t.clientY < window.innerHeight - e;
   }
   document.addEventListener('touchstart', e => {
+    Audio.unlock();
+    if (e.target.closest && e.target.closest('button')) return;   // let buttons get their tap
     const t = e.touches[0];
-    if (!inSafeZone(t)) { sx = sy = null; return; }
-    sx = t.clientX; sy = t.clientY; e.preventDefault();
+    if (e.touches.length > 1) { e.preventDefault(); return; }
+    if (!inSafeZone(t)) { T.active = false; return; }
+    T.active = true; T.sx = T.hx = t.clientX; T.sy = T.hy = t.clientY; T.stillSince = performance.now();
+    e.preventDefault();
   }, { passive: false });
   document.addEventListener('touchmove', e => {
-    if (sx === null) return;
+    if (!T.active) return;
     e.preventDefault();
-    const t = e.touches[0], dx = t.clientX - sx, dy = t.clientY - sy;
-    if (Math.max(Math.abs(dx), Math.abs(dy)) < THRESH) return;
-    turn(Math.abs(dx) > Math.abs(dy) ? (dx>0?'right':'left') : (dy>0?'down':'up'));
-    sx = t.clientX; sy = t.clientY;
+    const t = e.touches[0];
+    if (Math.hypot(t.clientX - T.hx, t.clientY - T.hy) > CFG.brake.stillPx) { T.hx = t.clientX; T.hy = t.clientY; T.stillSince = performance.now(); }
+    const dx = t.clientX - T.sx, dy = t.clientY - T.sy;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < CFG.swipe.thresh) return;
+    send('dir', Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
+    T.sx = t.clientX; T.sy = t.clientY;
   }, { passive: false });
-  document.addEventListener('touchend', () => { sx = sy = null; });
-  document.addEventListener('touchcancel', () => { sx = sy = null; });
+  const endTouch = e => { Audio.unlock(); if (e.touches.length === 0) { T.active = false; Brake.held = false; } };
+  document.addEventListener('touchend', endTouch);
+  document.addEventListener('touchcancel', endTouch);
+  function pollHold(now) {
+    if (T.active && !Brake.held && now - T.stillSince >= CFG.brake.holdMs) Brake.held = true;
+  }
 
-  // Keyboard for desktop
-  const KEYS = { ArrowUp:'up', ArrowDown:'down', ArrowLeft:'left', ArrowRight:'right', w:'up', s:'down', a:'left', d:'right' };
-  window.addEventListener('keydown', e => { const d = KEYS[e.key]; if (d) { e.preventDefault(); turn(d); } });
-  // Mouse click starts on desktop
-  board.addEventListener('mousedown', () => { if (state !== 'playing') start(); });
+  const KEYS = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right', w: 'up', s: 'down', a: 'left', d: 'right', W: 'up', S: 'down', A: 'left', D: 'right' };
+  window.addEventListener('keydown', e => {
+    Audio.unlock();
+    const d = KEYS[e.key];
+    if (d) { e.preventDefault(); send('dir', d); return; }
+    if (e.key === ' ') { e.preventDefault(); if (!e.repeat) { Brake.held = true; send('go'); } return; }
+    if (e.repeat) return;
+    if (e.key === 'Enter' || e.key === 'r' || e.key === 'R') { e.preventDefault(); send('run'); }
+    else if (e.key === 'c' || e.key === 'C') send('classic');
+    else if (e.key === 'm' || e.key === 'M') send('mute');
+    else if (e.key === 'Escape') send('menu');
+  });
+  window.addEventListener('keyup', e => { if (e.key === ' ') Brake.held = false; });
+  // Mouse click on the board starts a floor on desktop
+  board.addEventListener('mousedown', e => { if (!e.target.closest('button')) { Audio.unlock(); send('go'); } });
 
-  reset(); state = 'ready';
+  /* ====================================================================
+   * BOOT — requestAnimationFrame loop with a time accumulator
+   * ==================================================================== */
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(100, Math.max(0, now - last)); last = now;
+    pollHold(now);
+    screen.update(dt, now);
+    draw(now);
+    requestAnimationFrame(frame);
+  }
+  document.addEventListener('visibilitychange', () => { last = performance.now(); T.active = false; Brake.held = false; });
   window.addEventListener('resize', resize);
   resize();
+  setScreen('title');
+  requestAnimationFrame(frame);
+
+  // test hook (harmless in production)
+  window.__snake = { get game() { return game; }, get run() { return run; }, get screen() { return screenName; }, save, Brake, setScreen };
 })();
 </script>
 
 <script>
 // Offline support + update banner
-const APP_VERSION = '5';
+const APP_VERSION = '6';
 document.getElementById('ver').textContent = APP_VERSION;
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', async () => {

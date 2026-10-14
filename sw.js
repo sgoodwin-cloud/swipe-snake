@@ -1,5 +1,5 @@
 // Bump VERSION whenever the game changes, so phones pick up the new copy.
-const VERSION = 'swipe-snake-v5';
+const VERSION = 'swipe-snake-v6';
 // cache: 'reload' skips the phone's web cache, so a new version never stores stale files.
 const CORE = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 

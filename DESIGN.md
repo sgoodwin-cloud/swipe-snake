@@ -2,7 +2,7 @@
 
 The single source of truth for Swipe Snake: what the game is, how the code is laid out, how releases work, and what's planned. Update this file whenever a decision is made or a milestone moves, so any new chat session can pick up from here.
 
-_Last updated: 14 Oct 2026 · Current release: v5 (classic Snake) · Next: Milestone 1_
+_Last updated: 14 Oct 2026 · Current release: v5 on `main` · v6 (Milestone 1) built on branch `m1`, awaiting a play-test before merging · Next: Milestone 2_
 
 ---
 
@@ -34,8 +34,29 @@ These are settled. Don't break them without a deliberate decision logged in §9.
 
 ---
 
-## 3. Current state (v5)
+## 3. Current state (v6, Milestone 1)
 
+**Title screen** with Run, Classic and a Sound toggle; the HUD shows runs, best floor reached and classic best.
+
+**Run mode** (§6.1–6.3, no draft yet):
+- 9 floors in 3 acts. Each floor opens on an intro card ("Floor N · Act A · eat X, then exit", plus last floor's clear bonus) and waits for a swipe, so you can plan before moving. An "Abandon run" button sits on the intro card (counts as a run ended).
+- Food targets 6/8/10 by act; act speeds 160/145/130ms per move. Snake resets to length 3 each floor.
+- Hitting the target opens an **exit** (hollow blinking tile, at least 5 tiles from the head where possible) with a sweep and jingle. Food **keeps spawning** after the exit opens, so you can risk extra pickups for score before leaving.
+- Scoring: food = 10 × act number; floor clear = 20 × floor number; winning = +100.
+- HUD: Score · Floor n/9 · Food eaten/target. Brake meter (12 segments) under the board.
+- Death → shake and flash (~0.75s) → results screen (floor fallen on, score, new best). Winning floor 9 → "YOU WIN" results.
+
+**Brake:** hold a finger still (within 10px) for 250ms; time runs at 50% until you lift. Swiping while held steers and keeps braking. Desktop: hold Space. Meter: 3s from full, refills in 6s; if emptied, it's locked until it refills to 25%. Board gets a faint dark tint and sounds drop in pitch while braking. Run mode only.
+
+**Classic mode:** the v5 game unchanged in feel (140ms → 60ms ramp, 1 point per food, no Brake), with game-over buttons for Menu and swipe-to-play-again after a short lockout.
+
+**Game feel (always on):** bite pixel burst + bleep, death shake + flash + harsh bleep, exit sweep + jingle, floor-clear jingle, brake tint + blip. Web Audio unlocks on the first touch or key. Note: the iPhone's silent switch mutes Web Audio.
+
+**Save:** versioned object in `localStorage` key `swipe-snake-save` (§4.4 shape, `v: 1`). On first load the old `snake-best` value migrates into `stats.classicBest` (old key left in place). Stats tracked: runs, wins, bestFloor (highest floor reached), bestRunScore, classicBest. Sound setting saved.
+
+Keyboard: arrows/WASD steer, Space brakes (and starts a floor), Enter/R starts a run, C classic, M mute, Esc back to menu from Classic.
+
+### Carried over from v5
 Classic Snake with:
 - 16×16 grid on a retro LCD-style canvas (single dark theme, Silkscreen + VT323 fonts from Google Fonts with monospace fallbacks; fonts get cached by the service worker after first load).
 - Swipe anywhere on screen to steer, with a 28px dead zone at screen edges to avoid iOS gesture conflicts. Turns fire mid-swipe (22px threshold) and can chain without lifting. Up to 2 turns queued.
@@ -44,7 +65,9 @@ Classic Snake with:
 - Arrow keys / WASD on desktop.
 - Installable PWA with offline cache and an "Update ready · tap to reload" banner.
 
-**Open check:** the v5 update-flow fix (fresh fetch on install + "Updating…" feedback) hasn't yet been confirmed on the iPhone. Confirm on the next release.
+**Open check:** the v5 update-flow fix (fresh fetch on install + "Updating…" feedback) hasn't yet been confirmed on the iPhone. Confirm when v6 is merged to `main`.
+
+v6 also stops the global touch handler swallowing taps on buttons (it now ignores touches that start on a `<button>`), which may have been making the update banner hard to tap.
 
 ---
 
@@ -62,11 +85,23 @@ Classic Snake with:
 | `DESIGN.md` | This document |
 | `CLAUDE.md` | Pointer for Claude sessions working in the repo |
 
-### 4.2 Inside `index.html` today
+### 4.2 Inside `index.html` today (v6, ~600 lines)
 
 - **CSS tokens** on `:root`: `--case`, `--bezel`, `--lcd`, `--lcd-dim`, `--pixel`, `--ink`, `--muted`, plus font tokens. The canvas reads LCD colours from these at start-up.
-- **Game script** (one IIFE): config constants → state (`snake`, `dir`, `queue`, `food`, `score`, `state`) → logic (`reset`, `placeFood`, `turn`, `start`, `tick`, `gameOver`) → rendering (`resize`, `block`, `draw`) → input (touch on `document`, keyboard, mouse) → boot.
-- Game loop is a `setInterval` that's cleared and restarted when speed changes.
+- **Markup:** `#hud` (filled per screen by `setHud`), `#board` with canvas + `#overlay` (`#ovTitle`, `#ovLines`, `#ovMsg`, `#ovMenu` buttons, filled by `showOverlay`), `.under` row holding the brake `#meter` or the `#hint`.
+- **Game script** (one IIFE), sections numbered to match §4.3:
+  1. `CFG` — all tuning numbers
+  2. RNG — `mulberry32`; each run has a seed, each floor gets its own rng drawn from the run's rng. Cosmetic effects use `Math.random` so they never disturb the game sequence.
+  3. Save — `loadSave` / `migrate` / `writeSave`
+  4. Screens — `setScreen(name, data)`; `SCREENS.title`, `SCREENS.play` (mode `run` or `classic`, phases `ready → playing → dying | cleared | over`), `SCREENS.results`. Each has `enter`, `update(dt, now)`, `input(action, arg)`, `hud()`, and a `board` flag for drawing. **M2's draft screen goes where `play.update` handles the `cleared` phase.**
+  5. Run & board model — `run` (seed, rng, floor, score, `mutations: []`, `brakeMaxMs`) vs `game` (snake, food, exit, eaten, target, stepMs, accumulator). `step()` is one grid move; `eat`, `die`, `clearFloor`, `endRun`.
+  6. Content data — not yet needed (no layouts or mutations in M1)
+  7. Mutation hooks — not yet (M2)
+  8. Rendering — pre-rendered LCD background, `draw(now)`, `FX` (burst particles, exit sweep, shake offset)
+  9. Audio — `Audio` synth (`bite`, `death`, `exit`, `clear`, `win`, `brake`, `click`)
+  - Brake — `Brake` object (held, meter, exhausted lock, meter UI)
+  10. Input — touch (swipe + hold detection), keyboard, mouse; inputs become actions (`dir`, `go`, `run`, `classic`, `mute`, `menu`) sent to the current screen
+  - Boot — `requestAnimationFrame` loop with a time accumulator (dt capped at 100ms); `window.__snake` is a small test hook.
 - **PWA script**: `APP_VERSION`, service worker registration, update banner logic.
 
 ### 4.3 Planned structure (from Milestone 1)
@@ -257,15 +292,16 @@ The current game stays available from the title screen as **Classic**, with its 
 
 Each milestone is a playable release. Tick items as they're done and note the version that shipped them.
 
-### ☐ M1 — Run structure (target v6)
-- [ ] Code reorganised into the sections in §4.3; seeded RNG; `requestAnimationFrame` loop
-- [ ] Title screen with Run and Classic modes
-- [ ] 9-floor run: food targets, exit tile, length reset per floor, act speeds
-- [ ] Brake: hold-to-brake, meter UI, keyboard Space
-- [ ] Results screen (floor reached, run score)
-- [ ] Versioned save data with migration from `snake-best`
-- [ ] Core game feel: bite burst, death shake, Web Audio bleeps, mute toggle
-- [ ] Confirm the v5 update flow works on the iPhone
+### ☐ M1 — Run structure (v6, on branch `m1`)
+- [x] Code reorganised into the sections in §4.3; seeded RNG; `requestAnimationFrame` loop (v6)
+- [x] Title screen with Run and Classic modes (v6)
+- [x] 9-floor run: food targets, exit tile, length reset per floor, act speeds (v6)
+- [x] Brake: hold-to-brake, meter UI, keyboard Space (v6)
+- [x] Results screen (floor reached, run score) (v6)
+- [x] Versioned save data with migration from `snake-best` (v6)
+- [x] Core game feel: bite burst, death shake, Web Audio bleeps, mute toggle (v6)
+- [ ] Play-test v6 on the iPhone (brake feel, audio, button taps), then merge `m1` → `main`
+- [ ] Confirm the v5 update flow works on the iPhone (happens on that merge)
 
 ### ☐ M2 — The draft
 - [ ] Pick-1-of-3 screen between floors
@@ -320,12 +356,19 @@ Each milestone is a playable release. Tick items as they're done and note the ve
 | 14 Oct 2026 | Game must remain fully offline; roguelike layer chosen over online features |
 | 14 Oct 2026 | Moderate base speed; Brake is a core ability from the first run, upgraded via mutations |
 | 14 Oct 2026 | Mutations (snake) vs Workshop (handheld) split; core game feel never locked |
+| 14 Oct 2026 | M1: each floor starts on an intro card and waits for a swipe (planning time) |
+| 14 Oct 2026 | M1: food keeps spawning after the exit opens — extra score for extra risk |
+| 14 Oct 2026 | M1: run scoring 10 × act per food, 20 × floor per clear, +100 for a win; classic stays 1 per food so old bests still compare |
+| 14 Oct 2026 | M1: Brake is Run-only; Classic stays pure. An emptied meter locks until 25% refilled |
+| 14 Oct 2026 | M1: M1 work pushed to branch `m1`, merged to `main` only after a phone play-test |
 
 ---
 
 ## 10. Open questions
 
-- Exact Brake trigger timing (250ms hold) — check it doesn't misfire when starting a swipe slowly.
+- Exact Brake trigger timing (250ms hold, 10px drift) — check on the phone that it doesn't misfire when starting a swipe slowly.
+- There's no way to quit mid-floor on the phone (only "Abandon run" on the intro card). Add a pause button if it's missed.
+- Should food after the exit opens be worth more (or less) than normal?
 - Should Armoured's snapped-off tail drop anything, or just vanish?
 - Is 16×16 big enough once walls and beetles arrive, or should Act 3 boards go to 18×18?
 - Bits economy: how many runs should it take to unlock Constrictor? Target roughly 4–6.
