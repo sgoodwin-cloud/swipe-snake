@@ -88,6 +88,17 @@ canvas { display: block; width: 100%; height: 100%; border-radius: 3px; }
 }
 .menu button.ghost { background: transparent; color: var(--pixel); }
 .menu button.wide { flex-basis: 100%; }
+.menu.cards { flex-direction: column; flex-wrap: nowrap; width: 100%; max-width: 340px; gap: 8px; margin-top: 6px; }
+.menu button.card {
+  display: grid; grid-template-columns: 1fr auto; gap: 3px 8px; align-items: baseline;
+  width: 100%; min-width: 0; padding: 8px 10px; text-align: left; text-transform: none; letter-spacing: 0;
+}
+.card .cn { font-family: var(--f-display); font-size: 14px; letter-spacing: .05em; text-transform: uppercase; }
+.card .ct { font-family: var(--f-display); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; opacity: .7; }
+.card .cd { grid-column: 1 / -1; font-family: var(--f-digits); font-size: 18px; line-height: 1; }
+.menu.cards button.card { padding: 7px 10px; }
+.overlay .build { font-size: 18px; line-height: 1.1; max-width: 300px; }
+.charges { font-family: var(--f-display); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink); }
 .under { display: flex; justify-content: center; align-items: center; gap: 10px; min-height: 24px; }
 .hint { text-align: center; font-size: 19px; color: var(--muted); margin: 0; }
 .meter { display: flex; align-items: center; gap: 8px; font-family: var(--f-display); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
@@ -127,10 +138,10 @@ body { margin: 0; }
     </div>
   </div>
   <div class="under">
-    <div class="meter" id="meter" hidden><span>Brake</span><div class="segs" id="segs"></div></div>
+    <div class="meter" id="meter" hidden><span>Brake</span><div class="segs" id="segs"></div><span class="charges" id="charges"></span></div>
     <p class="hint" id="hint">Swipe to steer · hold to brake</p>
   </div>
-  <p class="ver">v<span id="ver">7</span></p>
+  <p class="ver">v<span id="ver">8</span></p>
 </div>
 <button id="update" hidden>Update ready · tap to reload</button>
 
@@ -165,7 +176,19 @@ body { margin: 0; }
     },
     swipe: { thresh: 22, edge: 28 },
     queueMax: 2,
-    fx: { burstCount: 8, burstMs: 380, shakeMs: 450, shakeCells: 0.35, deathMs: 750, exitSweepMs: 450 },
+    draft: { choices: 3, familyBias: 0.6 },   // weight = 1 + familyBias × mutations already held in that family
+    mut: {
+      batteryPerSeg: 0.04,             // Battery: +4% food value per segment beyond start length, per level
+      magnetRadius: [3, 4, 5],         // Magnet: pull range in tiles (Manhattan), by level
+      magnetEvery: 2,                  // Magnet: food drifts one tile every N moves
+      goldenChance: [0.2, 0.32, 0.45], // Golden Hour: chance a new food spawns golden, by level
+      goldenMult: 3, goldenSteps: 45,  // golden food value × and how many moves before it fades
+      gourmetWindow: [14, 20, 26],     // Gourmet: max moves between bites to keep a combo, by level
+      gourmetBonus: 0.5,               // Gourmet: bonus = base value × this × combo
+      deepTankPerLevel: 0.5,           // Deep Tank: +50% brake meter per level
+      quickRecoveryPerLevel: 1,        // Quick Recovery: refill ×2 at level 1, ×3 at level 2
+    },
+    fx: { burstCount: 8, burstMs: 380, shakeMs: 450, shakeCells: 0.35, deathMs: 750, exitSweepMs: 450, popupMs: 750 },
     inputLockMs: 600,                 // ignore buttons/swipes briefly after a game ends
   };
   const DIRS = { up: [0,-1], down: [0,1], left: [-1,0], right: [1,0] };
@@ -227,6 +250,99 @@ body { margin: 0; }
   writeSave();
 
   /* ====================================================================
+   * 6. CONTENT DATA — mutations (in-run upgrades, §6.4)
+   *    text(level) describes the level being offered. Most stack up to `max`.
+   *    Array order is also hook priority (e.g. Phase is spent before Armoured).
+   * ==================================================================== */
+  const FAMILIES = { body: 'Body', appetite: 'Appetite', move: 'Movement' };
+  const roman = n => ['', '', ' II', ' III'][n] || '';
+  const MUTATIONS = [
+    // ---- Movement & Brake
+    { id: 'phase', name: 'Phase', family: 'move', max: 2,
+      text: l => l === 1 ? 'Pass through your own body once per floor.' : 'Pass through your body twice per floor.',
+      hooks: {
+        onFloorStart(l, g) { g.charges.phase = l; },
+        onSelfCollide(l, c) { if (game.charges.phase > 0) { game.charges.phase--; return 'phase'; } return null; },
+      } },
+    { id: 'wrap', name: 'Wraparound', family: 'move', max: 1,
+      text: () => 'Leave one edge of the board and come back on the opposite side.',
+      hooks: { onWall(l, head) { return [(head[0] + N) % N, (head[1] + N) % N]; } } },
+    { id: 'deeptank', name: 'Deep Tank', family: 'move', max: 2,
+      text: () => 'Brake meter holds 50% more.',
+      hooks: { brakeMax(v, l) { return v * (1 + CFG.mut.deepTankPerLevel * l); } } },
+    { id: 'quickrec', name: 'Quick Recovery', family: 'move', max: 2,
+      text: l => l === 1 ? 'Brake meter refills twice as fast.' : 'Brake meter refills three times as fast.',
+      hooks: { brakeRefill(v, l) { return v / (1 + CFG.mut.quickRecoveryPerLevel * l); } } },
+    { id: 'coldblood', name: 'Cold Blood', family: 'move', max: 2,
+      text: l => l === 1 ? 'Food eaten while braking is worth double.' : 'Food eaten while braking is worth triple.',
+      hooks: { foodValue(v, l, c) { return c.braking ? v * (1 + l) : v; } } },
+    // ---- Body
+    { id: 'armoured', name: 'Armoured', family: 'body', max: 2,
+      text: l => l === 1 ? 'Once per floor, biting yourself snaps your tail off instead of killing you.' : 'Snap your tail off twice per floor.',
+      hooks: {
+        onFloorStart(l, g) { g.charges.armour = l; },
+        onSelfCollide(l, c) { if (game.charges.armour > 0) { game.charges.armour--; return 'snap'; } return null; },
+      } },
+    { id: 'battery', name: 'Battery', family: 'body', max: 3,
+      text: () => 'Every tail segment adds 4% to the value of food.',
+      hooks: { foodValue(v, l, c) { return v * (1 + CFG.mut.batteryPerSeg * l * Math.max(0, c.len - CFG.run.startLength)); } } },
+    { id: 'lean', name: 'Lean', family: 'body', max: 1,
+      text: () => 'Every other bite doesn’t grow your tail.',
+      hooks: { onEat(l, info) { game.leanSkip = !game.leanSkip; if (game.leanSkip) info.grow = Math.max(0, info.grow - 1); } } },
+    // ---- Appetite
+    { id: 'magnet', name: 'Magnet', family: 'appetite', max: 3,
+      text: l => 'Food within ' + CFG.mut.magnetRadius[l - 1] + ' tiles drifts towards your head.',
+      hooks: { onStep(l, g) { magnetPull(g, CFG.mut.magnetRadius[l - 1]); } } },
+    { id: 'golden', name: 'Golden Hour', family: 'appetite', max: 3,
+      text: l => Math.round(CFG.mut.goldenChance[l - 1] * 100) + '% of food spawns golden: worth ×3, but it fades.',
+      hooks: { onSpawnFood(l, g) { if (g.rng() < CFG.mut.goldenChance[l - 1]) { g.foodGolden = true; g.foodTtl = CFG.mut.goldenSteps; } } } },
+    { id: 'gourmet', name: 'Gourmet', family: 'appetite', max: 3,
+      text: l => 'Bites within ' + CFG.mut.gourmetWindow[l - 1] + ' moves of each other build a combo.',
+      hooks: { foodBonus(v, l, c) {
+        if (game.lastEatStep >= 0 && c.gap <= CFG.mut.gourmetWindow[l - 1]) { game.combo++; return v + c.base * CFG.mut.gourmetBonus * game.combo; }
+        game.combo = 0; return v;
+      } } },
+    { id: 'second', name: 'Second Helping', family: 'appetite', max: 1,
+      text: () => 'Each food counts double towards the floor target, but your tail grows by 2.',
+      hooks: { onEat(l, info) { info.count = 2; info.grow += 1; } } },
+  ];
+  const MUT = Object.fromEntries(MUTATIONS.map(m => [m.id, m]));
+
+  /* ====================================================================
+   * 7. MUTATION HOOKS — mutations react to named events instead of being
+   *    special-cased in the main loop. Only active during a run.
+   *    emit(name, ctx)       fire and forget        (onFloorStart, onEat, onStep, onSpawnFood)
+   *    reduce(name, v, ctx)  pass a value through  (foodValue, foodBonus, brakeMax, brakeRefill)
+   *    first(name, ctx)      first non-null answer (onSelfCollide, onWall)
+   * ==================================================================== */
+  const Hooks = {
+    *each(name) {
+      if (!run) return;
+      for (const m of MUTATIONS) { const l = run.mutations[m.id]; if (l && m.hooks[name]) yield [m.hooks[name], l]; }
+    },
+    emit(name, ctx) { for (const [h, l] of this.each(name)) h(l, ctx); },
+    reduce(name, v, ctx) { for (const [h, l] of this.each(name)) v = h(v, l, ctx); return v; },
+    first(name, ctx) { for (const [h, l] of this.each(name)) { const r = h(l, ctx); if (r) return r; } return null; },
+  };
+
+  // Draft: pick `choices` distinct mutations that aren't maxed, weighted towards families you hold.
+  function draftOptions() {
+    const held = {};
+    for (const id in run.mutations) held[MUT[id].family] = (held[MUT[id].family] || 0) + 1;
+    let pool = MUTATIONS.filter(m => (run.mutations[m.id] || 0) < m.max)
+      .map(m => ({ m, w: 1 + CFG.draft.familyBias * (held[m.family] || 0) }));
+    const out = [];
+    while (out.length < CFG.draft.choices && pool.length) {
+      let r = run.rng() * pool.reduce((s, p) => s + p.w, 0);
+      const i = pool.findIndex(p => (r -= p.w) < 0);
+      out.push(pool[i < 0 ? pool.length - 1 : i].m);
+      pool.splice(i < 0 ? pool.length - 1 : i, 1);
+    }
+    return out;
+  }
+  const buildText = () => run.build.length ? run.build.map(id => MUT[id].name + roman(run.mutations[id])).join(' · ') : 'No mutations';
+
+  /* ====================================================================
    * DOM handles
    * ==================================================================== */
   const $ = id => document.getElementById(id);
@@ -242,14 +358,22 @@ body { margin: 0; }
       const b = document.createElement('b'); b.textContent = value; s.append(b); return s;
     }));
   }
-  // showOverlay(null) hides it. buttons: [{label, fn, cls}]
+  // showOverlay(null) hides it. buttons: [{label, fn, cls, lock}] or cards: [{name, tag, text, fn, lock}]
+  // lines can be strings or {text, cls}
   function showOverlay(o) {
     if (!o) { overlay.hidden = true; return; }
     ovTitle.textContent = o.title || '';
-    ovLines.replaceChildren(...(o.lines || []).map(t => { const p = document.createElement('p'); p.className = 'sub'; p.textContent = t; return p; }));
+    ovLines.replaceChildren(...(o.lines || []).map(t => {
+      const p = document.createElement('p'); p.className = 'sub' + (t.cls ? ' ' + t.cls : ''); p.textContent = t.text || t; return p;
+    }));
     ovMsg.textContent = o.blink || ''; ovMsg.hidden = !o.blink;
-    ovMenu.replaceChildren(...(o.buttons || []).map(b => {
-      const el = document.createElement('button'); el.textContent = b.label; if (b.cls) el.className = b.cls;
+    ovMenu.classList.toggle('cards', !!o.cards);
+    ovMenu.replaceChildren(...(o.cards || o.buttons || []).map(b => {
+      const el = document.createElement('button');
+      if (b.name) {
+        el.className = 'card';
+        for (const [cls, txt] of [['cn', b.name], ['ct', b.tag], ['cd', b.text]]) { const s = document.createElement('span'); s.className = cls; s.textContent = txt; el.append(s); }
+      } else { el.textContent = b.label; if (b.cls) el.className = b.cls; }
       el.addEventListener('click', () => { if (performance.now() - screenAt < (b.lock ? CFG.inputLockMs : 0)) return; el.blur(); Audio.unlock(); Audio.click(); b.fn(); });
       return el;
     }));
@@ -290,6 +414,10 @@ body { margin: 0; }
       clear: () => seq([523, 659, 784, 1047], 0.08, { vol: 0.06 }),
       win:   () => seq([523, 659, 784, 1047, 784, 1047, 1319], 0.1, { vol: 0.06 }),
       death: () => { tone(220, 0.35, { type: 'sawtooth', vol: 0.07, slide: 0.3 }); tone(110, 0.4, { vol: 0.05, slide: 0.5, delay: 0.05 }); },
+      golden: () => { tone(880, 0.06); tone(1320, 0.07, { delay: 0.045 }); tone(1760, 0.08, { delay: 0.09 }); },
+      snap:  () => tone(320, 0.18, { type: 'sawtooth', vol: 0.06, slide: 0.35 }),
+      phase: () => tone(420, 0.16, { type: 'triangle', vol: 0.08, slide: 2 }),
+      pick:  () => seq([392, 523, 659], 0.07, { vol: 0.05 }),
     };
   })();
 
@@ -303,7 +431,8 @@ body { margin: 0; }
 
   function newRun() {
     const seed = newSeed();
-    return { seed, rng: mulberry32(seed), floor: 1, score: 0, mutations: [], brakeMaxMs: CFG.brake.maxMs };
+    // mutations: { id: level }; build: ids in the order first picked (for display)
+    return { seed, rng: mulberry32(seed), floor: 1, score: 0, mutations: {}, build: [] };
   }
 
   function newBoard(mode) {
@@ -312,14 +441,16 @@ body { margin: 0; }
       mode, phase: 'ready',
       rng: mode === 'run' ? mulberry32((run.rng() * 4294967296) >>> 0) : mulberry32(newSeed()),
       snake: Array.from({ length: len }, (_, i) => [7 - i, 8]),
-      dir: 'right', queue: [], food: null, exit: null, eaten: 0, score: 0, acc: 0, phaseAt: 0,
+      dir: 'right', queue: [], food: null, foodGolden: false, foodTtl: 0, exit: null, eaten: 0, score: 0, acc: 0, phaseAt: 0,
+      stepCount: 0, growPending: 0, lastEatStep: -1, combo: 0, leanSkip: false, charges: { phase: 0, armour: 0 },
     };
+    game = g;
     if (mode === 'run') {
       const act = actOf(run.floor);
       g.target = CFG.run.targets[act - 1];
       g.stepMs = CFG.run.actStepMs[act - 1];
+      Hooks.emit('onFloorStart', g);
     } else g.stepMs = CFG.classic.stepMs;
-    game = g;
     placeFood();
     return g;
   }
@@ -333,7 +464,26 @@ body { margin: 0; }
     for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if (!taken.has(key(x, y))) free.push([x, y]);
     return free;
   }
-  function placeFood() { game.food = null; const free = freeCells(); game.food = free.length ? pick(game.rng, free) : null; }
+  function placeFood() {
+    game.food = null; game.foodGolden = false; game.foodTtl = 0;
+    const free = freeCells(); game.food = free.length ? pick(game.rng, free) : null;
+    if (game.food && game.mode === 'run') Hooks.emit('onSpawnFood', game);
+  }
+  function cellFree(x, y) {
+    if (x < 0 || y < 0 || x >= N || y >= N) return false;
+    if (game.exit && game.exit[0] === x && game.exit[1] === y) return false;
+    return !game.snake.some(([a, b]) => a === x && b === y);
+  }
+  // Magnet: every few moves, food within range takes one step towards the head (never onto it).
+  function magnetPull(g, radius) {
+    if (!g.food || g.stepCount % CFG.mut.magnetEvery) return;
+    const [hx, hy] = g.snake[0], [fx, fy] = g.food, dx = hx - fx, dy = hy - fy, dist = Math.abs(dx) + Math.abs(dy);
+    if (dist > radius || dist <= 1) return;
+    const xs = [Math.sign(dx), 0], ys = [0, Math.sign(dy)];
+    for (const [mx, my] of Math.abs(dx) >= Math.abs(dy) ? [xs, ys] : [ys, xs]) {
+      if ((mx || my) && cellFree(fx + mx, fy + my)) { g.food = [fx + mx, fy + my]; return; }
+    }
+  }
   function openExit() {
     const [hx, hy] = game.snake[0];
     const free = freeCells();
@@ -358,34 +508,84 @@ body { margin: 0; }
   // One grid move. Returns false when the board stops (death, clear).
   function step() {
     if (game.queue.length) game.dir = game.queue.shift();
+    game.stepCount++;
     const [dx, dy] = DIRS[game.dir];
-    const head = [game.snake[0][0] + dx, game.snake[0][1] + dy];
+    let head = [game.snake[0][0] + dx, game.snake[0][1] + dy];
+    if (head[0] < 0 || head[1] < 0 || head[0] >= N || head[1] >= N) {
+      const wrapped = Hooks.first('onWall', head);
+      if (!wrapped) { die(); return false; }
+      head = wrapped;
+    }
     const eating = game.food && head[0] === game.food[0] && head[1] === game.food[1];
-    const body = eating ? game.snake : game.snake.slice(0, -1);
-    if (head[0] < 0 || head[1] < 0 || head[0] >= N || head[1] >= N || body.some(([x, y]) => x === head[0] && y === head[1])) { die(); return false; }
+    const tailStays = eating || game.growPending > 0;
+    const body = tailStays ? game.snake : game.snake.slice(0, -1);
+    const hit = body.findIndex(([x, y]) => x === head[0] && y === head[1]);
+    if (hit >= 0) {
+      const rescue = game.mode === 'run' ? Hooks.first('onSelfCollide', { index: hit }) : null;
+      if (rescue === 'snap') snapTail(hit, head);
+      else if (rescue === 'phase') { FX.popup(head, 'PHASE'); Audio.phase(); }
+      else { die(); return false; }
+    }
     game.snake.unshift(head);
     if (game.exit && head[0] === game.exit[0] && head[1] === game.exit[1]) { game.snake.pop(); clearFloor(); return false; }
     if (eating) {
-      eat();
+      const grow = eat();
+      if (grow === 0) game.snake.pop(); else game.growPending += grow - 1;
       if (game.snake.length === N * N) { die(true); return false; }
-    } else game.snake.pop();
+    } else if (game.growPending > 0) game.growPending--;
+    else game.snake.pop();
+    if (game.mode === 'run') {
+      Hooks.emit('onStep', game);
+      if (game.foodGolden && --game.foodTtl <= 0) { game.foodGolden = false; game.foodTtl = 0; }
+      showCharges();
+    }
     return true;
   }
 
+  // Armoured: everything from the bitten segment back falls away.
+  function snapTail(i, head) {
+    const lost = game.snake.splice(i);
+    lost.forEach(c => FX.burst(c, 3));
+    FX.popup(head, 'SNAP'); FX.shake(0.5); Audio.snap();
+  }
+
+  // Returns how many segments the snake grows by (0 = none).
   function eat() {
-    FX.burst(game.food); Audio.bite();
+    const pos = game.food, golden = game.foodGolden;
+    let grow = 1;
     if (game.mode === 'run') {
-      game.eaten++;
-      run.score += CFG.run.foodPoints * actOf(run.floor);
-      if (game.eaten === game.target) { placeFood(); openExit(); }
-      else placeFood();
+      const base = CFG.run.foodPoints * actOf(run.floor) * (golden ? CFG.mut.goldenMult : 1);
+      let v = Hooks.reduce('foodValue', base, { braking: Brake.active(), len: game.snake.length - 1 });
+      v = Hooks.reduce('foodBonus', v, { base, gap: game.stepCount - game.lastEatStep });
+      v = Math.round(v);
+      game.lastEatStep = game.stepCount;
+      const info = { count: 1, grow: 1 };
+      Hooks.emit('onEat', info);
+      grow = info.grow;
+      const before = game.eaten;
+      game.eaten += info.count;
+      run.score += v;
+      FX.popup(pos, '+' + v + (game.combo > 0 ? ' x' + (game.combo + 1) : ''));
+      placeFood();
+      if (before < game.target && game.eaten >= game.target) openExit();
     } else {
       game.score++;
       const c = CFG.classic;
       if (game.score % c.speedupEvery === 0) game.stepMs = Math.max(c.minStepMs, c.stepMs - Math.floor(game.score / c.speedupEvery) * c.speedupMs);
       placeFood();
     }
+    FX.burst(pos); golden ? Audio.golden() : Audio.bite();
     screen.hud();
+    return grow;
+  }
+
+  let chargesShown = null;
+  function showCharges() {
+    const parts = [];
+    if (run && run.mutations.phase) parts.push('Phase ' + game.charges.phase);
+    if (run && run.mutations.armoured) parts.push('Armour ' + game.charges.armour);
+    const t = parts.join(' · ');
+    if (t !== chargesShown) { chargesShown = t; $('charges').textContent = t; }
   }
 
   function die(won) {
@@ -415,15 +615,15 @@ body { margin: 0; }
    * BRAKE — hold-to-slow with a meter (Run mode only)
    * ==================================================================== */
   const Brake = {
-    held: false, meter: CFG.brake.maxMs, max: CFG.brake.maxMs, exhausted: false, was: false, shown: -1,
-    reset(max) { this.max = max; this.meter = max; this.exhausted = false; this.shown = -1; },
+    held: false, meter: CFG.brake.maxMs, max: CFG.brake.maxMs, refillMs: CFG.brake.refillMs, exhausted: false, was: false, shown: -1,
+    reset(max, refillMs) { this.max = max; this.refillMs = refillMs; this.meter = max; this.exhausted = false; this.shown = -1; },
     active() { return this.held && !this.exhausted && game && game.mode === 'run' && game.phase === 'playing'; },
     update(dt) {
       const b = CFG.brake;
       const on = this.active();
       if (on) { this.meter -= dt; if (this.meter <= 0) { this.meter = 0; this.exhausted = true; } }
       else {
-        this.meter = Math.min(this.max, this.meter + dt * this.max / b.refillMs);
+        this.meter = Math.min(this.max, this.meter + dt * this.max / this.refillMs);
         if (this.exhausted && this.meter >= this.max * b.resumeAt) this.exhausted = false;
       }
       if (on && !this.was) Audio.brake();
@@ -468,19 +668,33 @@ body { margin: 0; }
   }
 
   const FX = {
-    parts: [], shakeAt: -1e9, sweeps: [],
-    burst([x, y]) {
+    parts: [], shakeAt: -1e9, shakeScale: 1, sweeps: [], pops: [],
+    burst([x, y], count = CFG.fx.burstCount) {
       const now = performance.now();
-      for (let i = 0; i < CFG.fx.burstCount; i++) {
-        const a = (i / CFG.fx.burstCount) * Math.PI * 2 + Math.random() * 0.6, v = 2.2 + Math.random() * 1.6;
+      for (let i = 0; i < count; i++) {
+        const a = (i / count) * Math.PI * 2 + Math.random() * 0.6, v = 2.2 + Math.random() * 1.6;
         this.parts.push({ x: x + 0.5, y: y + 0.5, vx: Math.cos(a) * v, vy: Math.sin(a) * v, born: now });
       }
     },
-    shake() { this.shakeAt = performance.now(); },
+    shake(scale = 1) { this.shakeAt = performance.now(); this.shakeScale = scale; },
     sweep(c) { this.sweeps.push({ c, born: performance.now() }); },
-    clear() { this.parts = []; this.sweeps = []; this.shakeAt = -1e9; },
+    popup([x, y], text) { this.pops.push({ x: x + 0.5, y: y + 0.5, text, born: performance.now() }); },
+    clear() { this.parts = []; this.sweeps = []; this.pops = []; this.shakeAt = -1e9; },
     draw(now) {
       const f = CFG.fx;
+      // score popups: rise and fade, kept inside the board
+      this.pops = this.pops.filter(p => now - p.born < f.popupMs);
+      if (this.pops.length) {
+        ctx.font = Math.round(cell * 0.85) + 'px VT323, "Courier New", monospace';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = C.px;
+        for (const p of this.pops) {
+          const k = (now - p.born) / f.popupMs, w = ctx.measureText(p.text).width;
+          const px = Math.min(canvas.width - w / 2 - 2, Math.max(w / 2 + 2, p.x * cell));
+          const py = Math.max(cell * 0.5, (p.y - 0.9 - k * 0.9) * cell);
+          ctx.globalAlpha = 1 - k * k; ctx.fillText(p.text, px, py);
+        }
+        ctx.globalAlpha = 1;
+      }
       this.parts = this.parts.filter(p => now - p.born < f.burstMs);
       ctx.fillStyle = C.px;
       for (const p of this.parts) {
@@ -497,7 +711,7 @@ body { margin: 0; }
     offset(now) {
       const k = 1 - (now - this.shakeAt) / CFG.fx.shakeMs;
       if (k <= 0) return [0, 0];
-      const m = CFG.fx.shakeCells * cell * k;
+      const m = CFG.fx.shakeCells * this.shakeScale * cell * k;
       return [(Math.random() * 2 - 1) * m, (Math.random() * 2 - 1) * m];
     },
   };
@@ -513,7 +727,18 @@ body { margin: 0; }
         frameCell(game.exit[0], game.exit[1], 0.06, 0.16);
         if (on) block(game.exit[0], game.exit[1], 0.34, C.px);
       }
-      if (game.food) block(game.food[0], game.food[1], 0.28, C.px);
+      if (game.food) {
+        const [fx, fy] = game.food;
+        if (game.foodGolden) {
+          // golden food: a ringed square that blinks as it's about to fade
+          if (!(game.foodTtl < 12 && Math.floor(now / 110) % 2)) { block(fx, fy, 0.12, C.px); block(fx, fy, 0.24, C.lcd); block(fx, fy, 0.36, C.px); }
+        } else block(fx, fy, 0.28, C.px);
+      }
+      if (run && run.mutations.wrap && game.mode === 'run') {
+        // Wraparound: dashed board edge = the walls are open
+        ctx.save(); ctx.strokeStyle = C.px; ctx.lineWidth = cell * 0.08; ctx.setLineDash([cell * 0.35, cell * 0.35]);
+        ctx.strokeRect(ctx.lineWidth / 2, ctx.lineWidth / 2, canvas.width - ctx.lineWidth, canvas.height - ctx.lineWidth); ctx.restore();
+      }
       const flashing = game.phase === 'dying' && !game.won && Math.floor((now - game.phaseAt) / 90) % 2 === 1;
       if (!flashing) game.snake.forEach(([x, y], i) => block(x, y, i === 0 ? 0.04 : 0.1, C.px));
     }
@@ -527,7 +752,7 @@ body { margin: 0; }
    * 4. SCREEN STATE MACHINE
    *    title → play(run, floor 1) → play(floor 2) … → results → title
    *    title → play(classic)
-   *    (Milestone 2 slots the draft screen in between floors.)
+   *    floors 1–8 end on the draft screen: play → draft → play(next floor)
    * ==================================================================== */
   let screen = null, screenName = '', screenAt = 0;
   function setScreen(name, data) {
@@ -569,12 +794,12 @@ body { margin: 0; }
         FX.clear();
         newBoard(d.mode);
         if (d.mode === 'run') {
-          Brake.reset(run.brakeMaxMs);
+          Brake.reset(Hooks.reduce('brakeMax', CFG.brake.maxMs), Hooks.reduce('brakeRefill', CFG.brake.refillMs));
           this.hud = () => setHud([['Score', run.score], ['Floor', run.floor + '/' + CFG.run.floors], ['Food', Math.min(game.eaten, game.target) + '/' + game.target]]);
-          setUnder('meter');
+          setUnder('meter'); chargesShown = null; showCharges();
           const act = actOf(run.floor);
           const lines = [];
-          if (d.cleared) lines.push('Floor ' + d.cleared + ' clear  +' + d.bonus);
+          if (d.picked) lines.push('Gained ' + MUT[d.picked].name + roman(run.mutations[d.picked]));
           lines.push('Act ' + act + ' · eat ' + game.target + ', then exit');
           showOverlay({ title: 'FLOOR ' + run.floor, lines, blink: 'Swipe to start', buttons: [{ label: 'Abandon run', cls: 'ghost', fn: () => endRun(false) }] });
         } else {
@@ -593,7 +818,7 @@ body { margin: 0; }
           if (game.mode === 'run') endRun(false); else this.classicOver();
         } else if (game.phase === 'cleared' && now - game.phaseAt >= CFG.run.clearPauseMs) {
           if (run.floor >= CFG.run.floors) endRun(true);
-          else { const cleared = run.floor, bonus = game.bonus; run.floor++; setScreen('play', { mode: 'run', cleared, bonus }); }
+          else setScreen('draft', { cleared: run.floor, bonus: game.bonus });
         }
       },
       classicOver() {
@@ -621,6 +846,37 @@ body { margin: 0; }
       },
     },
 
+    // Between floors: choose 1 of 3 mutations. The cleared board stays visible underneath.
+    draft: {
+      board: true,
+      enter(d) {
+        game.phase = 'over';
+        this.opts = draftOptions();
+        this.hud = () => setHud([['Score', run.score], ['Next floor', (run.floor + 1) + '/' + CFG.run.floors]]);
+        this.hud();
+        setUnder('Floor ' + d.cleared + ' clear +' + d.bonus + ' · keep it all run');
+        showOverlay({
+          title: 'MUTATE',
+          cards: this.opts.map((m, i) => {
+            const next = (run.mutations[m.id] || 0) + 1;
+            return { name: m.name + roman(next), tag: FAMILIES[m.family], text: m.text(next), fn: () => this.pick(i), lock: true };
+          }),
+        });
+      },
+      pick(i) {
+        const m = this.opts[i]; if (!m) return;
+        run.mutations[m.id] = (run.mutations[m.id] || 0) + 1;
+        if (!run.build.includes(m.id)) run.build.push(m.id);
+        Audio.pick();
+        run.floor++;
+        setScreen('play', { mode: 'run', picked: m.id });
+      },
+      update() {},
+      input(a, d) {
+        if (a === 'pick' && performance.now() - screenAt >= CFG.inputLockMs) this.pick(d);
+      },
+    },
+
     results: {
       board: true,
       enter(d) {
@@ -631,6 +887,7 @@ body { margin: 0; }
         setUnder('Runs ' + st.runs + ' · wins ' + st.wins);
         const lines = d.won ? ['All 9 floors cleared'] : ['Fell on floor ' + d.floor + ' · act ' + actOf(d.floor)];
         lines.push('Score ' + d.score + (d.newBest ? ' · new best!' : ''));
+        lines.push({ text: buildText(), cls: 'build' });
         showOverlay({
           title: d.won ? 'YOU WIN' : 'RUN OVER', lines,
           buttons: [{ label: 'Run again', fn: beginRun, lock: true }, { label: 'Menu', cls: 'ghost', fn: () => setScreen('title'), lock: true }],
@@ -694,6 +951,7 @@ body { margin: 0; }
     else if (e.key === 'c' || e.key === 'C') send('classic');
     else if (e.key === 'm' || e.key === 'M') send('mute');
     else if (e.key === 'Escape') send('menu');
+    else if (e.key === '1' || e.key === '2' || e.key === '3') send('pick', +e.key - 1);
   });
   window.addEventListener('keyup', e => { if (e.key === ' ') Brake.held = false; });
   // Mouse click on the board starts a floor on desktop
@@ -717,13 +975,13 @@ body { margin: 0; }
   requestAnimationFrame(frame);
 
   // test hook (harmless in production)
-  window.__snake = { get game() { return game; }, get run() { return run; }, get screen() { return screenName; }, save, Brake, setScreen };
+  window.__snake = { get game() { return game; }, get run() { return run; }, get screen() { return screenName; }, get opts() { return screen.opts; }, save, Brake, setScreen, MUT, draftOptions, step };
 })();
 </script>
 
 <script>
 // Offline support + update banner
-const APP_VERSION = '7';
+const APP_VERSION = '8';
 document.getElementById('ver').textContent = APP_VERSION;
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', async () => {

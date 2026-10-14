@@ -2,7 +2,7 @@
 
 The single source of truth for Swipe Snake: what the game is, how the code is laid out, how releases work, and what's planned. Update this file whenever a decision is made or a milestone moves, so any new chat session can pick up from here.
 
-_Last updated: 14 Oct 2026 · Current release: v7 (Milestone 1 + update-button fix) on `main` · Next: Milestone 2_
+_Last updated: 14 Oct 2026 · Current release: v8 (Milestone 2: the draft) on `main` · Next: Milestone 3_
 
 ---
 
@@ -34,17 +34,38 @@ These are settled. Don't break them without a deliberate decision logged in §9.
 
 ---
 
-## 3. Current state (v7, Milestone 1)
+## 3. Current state (v8, Milestone 2)
 
 **Title screen** with Run, Classic and a Sound toggle; the HUD shows runs, best floor reached and classic best.
 
-**Run mode** (§6.1–6.3, no draft yet):
-- 9 floors in 3 acts. Each floor opens on an intro card ("Floor N · Act A · eat X, then exit", plus last floor's clear bonus) and waits for a swipe, so you can plan before moving. An "Abandon run" button sits on the intro card (counts as a run ended).
+**Run mode** (§6.1–6.4):
+- 9 floors in 3 acts. Each floor opens on an intro card ("Floor N · Act A · eat X, then exit", plus the mutation just gained) and waits for a swipe, so you can plan before moving. An "Abandon run" button sits on the intro card (counts as a run ended).
 - Food targets 6/8/10 by act; act speeds 160/145/130ms per move. Snake resets to length 3 each floor.
 - Hitting the target opens an **exit** (hollow blinking tile, at least 5 tiles from the head where possible) with a sweep and jingle. Food **keeps spawning** after the exit opens, so you can risk extra pickups for score before leaving.
 - Scoring: food = 10 × act number; floor clear = 20 × floor number; winning = +100.
 - HUD: Score · Floor n/9 · Food eaten/target. Brake meter (12 segments) under the board.
-- Death → shake and flash (~0.75s) → results screen (floor fallen on, score, new best). Winning floor 9 → "YOU WIN" results.
+- Death → shake and flash (~0.75s) → results screen (floor fallen on, score, new best, and the build). Winning floor 9 → "YOU WIN" results.
+- **Draft** after floors 1–8: "MUTATE" screen with 3 cards (name + level, family, effect). Tap a card (or press 1/2/3); the cleared board stays dimmed underneath and the row below shows the clear bonus. Cards ignore taps for 0.6s so a swipe that just finished the floor can't pick by accident.
+- Score popups (+value, combo ×n, PHASE, SNAP) rise from the snake. Phase/Armour charges show beside the brake meter when held. Wraparound draws a dashed board edge. Golden food is a ringed square that blinks before fading.
+
+**Mutations (v8 pool, 12):** most stack to II or III; maxed ones stop being offered. Numbers live in `CFG.mut`.
+
+| Mutation | Family | Max | Effect |
+|---|---|---|---|
+| Phase | Movement | II | Pass through your own body once (II: twice) per floor |
+| Wraparound | Movement | I | Leave one edge, come back on the opposite side |
+| Deep Tank | Movement | II | Brake meter +50% per level |
+| Quick Recovery | Movement | II | Brake refills ×2 (II: ×3) as fast |
+| Cold Blood | Movement | II | Food eaten while braking ×2 (II: ×3) |
+| Armoured | Body | II | Once (II: twice) per floor, biting yourself snaps the tail off at that point instead of killing you; the lost tail vanishes |
+| Battery | Body | III | +4% food value per tail segment beyond 3, per level |
+| Lean | Body | I | Every other bite doesn't grow your tail |
+| Magnet | Appetite | III | Food within 3/4/5 tiles drifts one tile towards your head every 2 moves |
+| Golden Hour | Appetite | III | 20/32/45% of food spawns golden: ×3 value, fades after 45 moves |
+| Gourmet | Appetite | III | Bites within 14/20/26 moves of each other build a combo: +50% of base value × combo |
+| Second Helping | Appetite | I | Each food counts 2 towards the target; tail grows by 2 |
+
+Rules: if both are held, Phase is spent before Armoured. Value order: base (10 × act, ×3 if golden) → Battery → Cold Blood → Gourmet bonus. Draft weighting: each option's weight is 1 + 0.6 × mutations you already hold in its family. Classic mode never sees mutations.
 
 **Brake:** hold a finger still (within 10px) for 250ms; time runs at 50% until you lift. Swiping while held steers and keeps braking. Desktop: hold Space. Meter: 3s from full, refills in 6s; if emptied, it's locked until it refills to 25%. Board gets a faint dark tint and sounds drop in pitch while braking. Run mode only.
 
@@ -95,10 +116,10 @@ v7 also makes the reload wait for the new worker to report `activated` (plus `co
   1. `CFG` — all tuning numbers
   2. RNG — `mulberry32`; each run has a seed, each floor gets its own rng drawn from the run's rng. Cosmetic effects use `Math.random` so they never disturb the game sequence.
   3. Save — `loadSave` / `migrate` / `writeSave`
-  4. Screens — `setScreen(name, data)`; `SCREENS.title`, `SCREENS.play` (mode `run` or `classic`, phases `ready → playing → dying | cleared | over`), `SCREENS.results`. Each has `enter`, `update(dt, now)`, `input(action, arg)`, `hud()`, and a `board` flag for drawing. **M2's draft screen goes where `play.update` handles the `cleared` phase.**
+  4. Screens — `setScreen(name, data)`; `SCREENS.title`, `SCREENS.play` (mode `run` or `classic`, phases `ready → playing → dying | cleared | over`), `SCREENS.results`. Each has `enter`, `update(dt, now)`, `input(action, arg)`, `hud()`, and a `board` flag for drawing. `SCREENS.draft` sits between floors (`play` → `draft` → `play`).
   5. Run & board model — `run` (seed, rng, floor, score, `mutations: []`, `brakeMaxMs`) vs `game` (snake, food, exit, eaten, target, stepMs, accumulator). `step()` is one grid move; `eat`, `die`, `clearFloor`, `endRun`.
-  6. Content data — not yet needed (no layouts or mutations in M1)
-  7. Mutation hooks — not yet (M2)
+  6. Content data — `MUTATIONS` (id, name, family, max, `text(level)`, `hooks`), `FAMILIES`, `draftOptions()` (weighted pick, seeded from the run rng), `buildText()`
+  7. Mutation hooks — `Hooks.emit` (onFloorStart, onEat, onStep, onSpawnFood), `Hooks.reduce` (foodValue, foodBonus, brakeMax, brakeRefill), `Hooks.first` (onSelfCollide → 'phase'/'snap', onWall → wrapped head). Hooks iterate in `MUTATIONS` order and do nothing outside a run. **Adding a mutation = adding one entry to `MUTATIONS`.**
   8. Rendering — pre-rendered LCD background, `draw(now)`, `FX` (burst particles, exit sweep, shake offset)
   9. Audio — `Audio` synth (`bite`, `death`, `exit`, `clear`, `win`, `brake`, `click`)
   - Brake — `Brake` object (held, meter, exhausted lock, meter UI)
@@ -208,6 +229,7 @@ Four families. The draft gently favours families you already hold so builds come
 | Spiked | Hazards that touch your tail die and drop a bonus |
 | Armoured | First self-collision each floor snaps the tail off at that point instead of killing you |
 | Battery | Each segment adds a small multiplier to food value |
+| Lean (added in M2) | Every other bite doesn't grow your tail — the anti-Battery pick |
 | Bomb (later) | Every 5th segment detonates on a sharp turn, clearing nearby hazards |
 
 **Appetite** — food
@@ -306,14 +328,16 @@ Each milestone is a playable release. Tick items as they're done and note the ve
 - [x] Play-test v6 on the iPhone, then merge `m1` → `main` (v6, 14 Oct 2026)
 - [x] Confirm the update banner works on the iPhone without a force-close (v7)
 
-### ☐ M2 — The draft
-- [ ] Pick-1-of-3 screen between floors
-- [ ] Mutation hook system
-- [ ] ~12 mutations from Body, Appetite, Movement & Brake
-- [ ] Draft weighting towards held families
-- [ ] Run summary shows the build
+### ☑ M2 — The draft (v8)
+- [x] Pick-1-of-3 screen between floors (v8)
+- [x] Mutation hook system (v8)
+- [x] 12 mutations from Body, Appetite, Movement & Brake, most stacking to II/III (v8)
+- [x] Draft weighting towards held families (v8)
+- [x] Run summary shows the build (v8)
+- [ ] Play-test on the iPhone: are any mutations useless or overpowered?
 
 ### ☐ M3 — Acts and threats
+- [ ] Spiked mutation (needs Beetles, so it lands with them)
 - [ ] Wall layouts per act
 - [ ] Beetles (Act 2)
 - [ ] Portals and shrinking boards (Act 3)
@@ -367,6 +391,11 @@ Each milestone is a playable release. Tick items as they're done and note the ve
 | 14 Oct 2026 | v6 play-tested successfully and merged to `main` |
 | 14 Oct 2026 | v7: update button reloads only once the new worker is active; root cause of dead banner taps traced to v5's touch handler |
 | 14 Oct 2026 | v7 update confirmed working on the iPhone from the banner tap; Milestone 1 complete |
+| 14 Oct 2026 | M2: mutations stack in levels (I–III) so the draft has upgrade depth, not just breadth |
+| 14 Oct 2026 | M2: Spiked deferred to M3 (no hazards yet); new Body mutation **Lean** fills the slot and pulls against Battery |
+| 14 Oct 2026 | M2: Armoured's snapped-off tail just vanishes (answers the open question) |
+| 14 Oct 2026 | M2: Phase is used before Armoured when both are held, so you keep your length |
+| 14 Oct 2026 | M2: released straight to `main` (no branch) after M1 went smoothly |
 
 ---
 
@@ -375,6 +404,5 @@ Each milestone is a playable release. Tick items as they're done and note the ve
 - Exact Brake trigger timing (250ms hold, 10px drift) — check on the phone that it doesn't misfire when starting a swipe slowly.
 - There's no way to quit mid-floor on the phone (only "Abandon run" on the intro card). Add a pause button if it's missed.
 - Should food after the exit opens be worth more (or less) than normal?
-- Should Armoured's snapped-off tail drop anything, or just vanish?
 - Is 16×16 big enough once walls and beetles arrive, or should Act 3 boards go to 18×18?
 - Bits economy: how many runs should it take to unlock Constrictor? Target roughly 4–6.
