@@ -130,7 +130,7 @@ body { margin: 0; }
     <div class="meter" id="meter" hidden><span>Brake</span><div class="segs" id="segs"></div></div>
     <p class="hint" id="hint">Swipe to steer · hold to brake</p>
   </div>
-  <p class="ver">v<span id="ver">6</span></p>
+  <p class="ver">v<span id="ver">7</span></p>
 </div>
 <button id="update" hidden>Update ready · tap to reload</button>
 
@@ -723,19 +723,27 @@ body { margin: 0; }
 
 <script>
 // Offline support + update banner
-const APP_VERSION = '6';
+const APP_VERSION = '7';
 document.getElementById('ver').textContent = APP_VERSION;
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', async () => {
     try {
       const reg = await navigator.serviceWorker.register('sw.js');
       const btn = document.getElementById('update');
+      let reloading = false;
+      const reload = () => { if (!reloading) { reloading = true; location.reload(); } };
+      // Tap → tell the waiting worker to take over → reload once it has actually switched on.
+      // Reloading before then would let the old worker serve the old page again (iOS can be slow
+      // to fire controllerchange), so we listen for 'activated' too and only use a timer as a last resort.
       const show = w => {
         btn.hidden = false;
         btn.onclick = () => {
+          const nw = reg.waiting || w;
           btn.textContent = 'Updating…'; btn.disabled = true;
-          w.postMessage('skipWaiting');
-          setTimeout(() => location.reload(), 2500);  // fallback if the swap event doesn't fire
+          if (!nw || nw.state === 'activated') return reload();
+          nw.addEventListener('statechange', () => { if (nw.state === 'activated') reload(); });
+          nw.postMessage('skipWaiting');
+          setTimeout(reload, 5000);
         };
       };
       // Catch an update whatever stage it's at: already waiting, mid-download, or found later.
@@ -749,8 +757,7 @@ if ('serviceWorker' in navigator) {
       track(reg.installing);
       reg.addEventListener('updatefound', () => track(reg.installing));
       reg.update().catch(() => {});
-      let reloading = false;
-      navigator.serviceWorker.addEventListener('controllerchange', () => { if (!reloading) { reloading = true; location.reload(); } });
+      navigator.serviceWorker.addEventListener('controllerchange', reload);
       document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(()=>{}); });
     } catch (e) {}
   });

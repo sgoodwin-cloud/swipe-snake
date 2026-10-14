@@ -2,7 +2,7 @@
 
 The single source of truth for Swipe Snake: what the game is, how the code is laid out, how releases work, and what's planned. Update this file whenever a decision is made or a milestone moves, so any new chat session can pick up from here.
 
-_Last updated: 14 Oct 2026 · Current release: v6 (Milestone 1) on `main` · Next: Milestone 2_
+_Last updated: 14 Oct 2026 · Current release: v7 (Milestone 1 + update-button fix) on `main` · Next: Milestone 2_
 
 ---
 
@@ -34,7 +34,7 @@ These are settled. Don't break them without a deliberate decision logged in §9.
 
 ---
 
-## 3. Current state (v6, Milestone 1)
+## 3. Current state (v7, Milestone 1)
 
 **Title screen** with Run, Classic and a Sound toggle; the HUD shows runs, best floor reached and classic best.
 
@@ -65,9 +65,11 @@ Classic Snake with:
 - Arrow keys / WASD on desktop.
 - Installable PWA with offline cache and an "Update ready · tap to reload" banner.
 
-**Open check:** the v5 update-flow fix (fresh fetch on install + "Updating…" feedback) hasn't yet been confirmed on the iPhone. Confirm when the phone updates to v6.
+**Update button — root cause found (14 Oct 2026):** in v5 and earlier, the swipe handler called `preventDefault()` on every `touchstart` in the safe zone, which includes the update banner. iOS then never fired the button's `click`, so tapping did nothing (not even "Updating…") and only a force-close applied the update. v6 fixed this by ignoring touches that start on a `<button>`. Because the banner you tap belongs to the *old* page, the fix only shows up from the v6 → v7 update onwards. Reproduced in headless Chromium with touch: v5 → v6 tap does nothing; v6 → v7 and v7 → v8 taps reload onto the new version.
 
-v6 also stops the global touch handler swallowing taps on buttons (it now ignores touches that start on a `<button>`), which may have been making the update banner hard to tap.
+v7 also makes the reload wait for the new worker to report `activated` (plus `controllerchange`), with a 5s timer only as a last resort, instead of a blind 2.5s timer that could reload onto the old page on a slow iPhone.
+
+**Open check:** confirm on the iPhone that the v6 → v7 update applies from the banner tap alone.
 
 ---
 
@@ -156,6 +158,7 @@ Migrate the old `snake-best` key into `stats.classicBest` on first load. Planned
 ### Known PWA / iOS gotchas
 
 - **Stale files on update (fixed in v5):** the install step must fetch with `cache: 'reload'`, otherwise iOS's HTTP cache can feed the old page into the new cache. Keep this.
+- **Buttons and the swipe handler:** never `preventDefault()` a `touchstart` that begins on a `<button>`, or iOS won't fire its `click`. This is what broke the update banner up to v5.
 - **Old service workers carry old bugs:** a fix to the update logic only takes effect *after* the phone has that version. If the update flow itself breaks, the phone may need fully closing and reopening (app switcher) a couple of times.
 - **Storage separation:** the home-screen app's storage is separate from Safari's. Deleting the icon deletes saves.
 - **No vibration on iPhone.** Don't design anything that depends on haptics.
@@ -301,7 +304,7 @@ Each milestone is a playable release. Tick items as they're done and note the ve
 - [x] Versioned save data with migration from `snake-best` (v6)
 - [x] Core game feel: bite burst, death shake, Web Audio bleeps, mute toggle (v6)
 - [x] Play-test v6 on the iPhone, then merge `m1` → `main` (v6, 14 Oct 2026)
-- [ ] Confirm the v5 update flow works on the iPhone (check when the phone picks up v6 from `main`)
+- [ ] Confirm the update banner works on the iPhone without a force-close (v6 → v7 is the first update that can)
 
 ### ☐ M2 — The draft
 - [ ] Pick-1-of-3 screen between floors
@@ -362,6 +365,7 @@ Each milestone is a playable release. Tick items as they're done and note the ve
 | 14 Oct 2026 | M1: Brake is Run-only; Classic stays pure. An emptied meter locks until 25% refilled |
 | 14 Oct 2026 | M1: M1 work pushed to branch `m1`, merged to `main` only after a phone play-test |
 | 14 Oct 2026 | v6 play-tested successfully and merged to `main` |
+| 14 Oct 2026 | v7: update button reloads only once the new worker is active; root cause of dead banner taps traced to v5's touch handler |
 
 ---
 
