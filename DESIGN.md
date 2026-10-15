@@ -244,7 +244,7 @@ Four families. The draft gently favours families you already hold so builds come
 | Name | Effect |
 |---|---|
 | Phase | Pass through your own body once per floor |
-| Wraparound | Cross the board edge on open floors |
+| Wraparound | Cross the board edge wherever it isn't walled (layouts can wall all, part or none of the border) |
 | Deep Tank | Brake meter +50% |
 | Quick Recovery | Brake refills twice as fast |
 | Cold Blood | Food eaten while braking is worth double |
@@ -263,7 +263,7 @@ Design intent: Constrictor + Spiked + Battery + Magnet should be a recognisable,
 | Act | Floors | Adds |
 |---|---|---|
 | 1 | 1–3 | Open boards, then simple wall layouts |
-| 2 | 4–6 | **Beetles**: walk in straight lines, bounce off walls, kill on contact with your head |
+| 2 | 4–6 | **Beetles**: walk in straight lines, bounce off walls *and your body*, kill on contact with your head. Phase/Armoured don't protect against them |
 | 3 | 7–8 | **Portals** (paired) and **shrinking boards** (outer ring becomes wall partway through) |
 | Finale | 9 | **Ouroboros**: a rival AI snake competing for the same food. Win by trapping it (it dies if it has no legal move) or by reaching the target first |
 
@@ -396,6 +396,9 @@ Each milestone is a playable release. Tick items as they're done and note the ve
 | 14 Oct 2026 | M2: Armoured's snapped-off tail just vanishes (answers the open question) |
 | 14 Oct 2026 | M2: Phase is used before Armoured when both are held, so you keep your length |
 | 14 Oct 2026 | M2: released straight to `main` (no branch) after M1 went smoothly |
+| 15 Oct 2026 | M3: walls are a standard part of layouts, including along the board edge. Wraparound works only through edge cells that aren't walled |
+| 15 Oct 2026 | M3: beetles bounce off the snake's body as if it were a wall (herding tool; sets up Spiked and Constrictor) |
+| 15 Oct 2026 | M3: board stays 16×16 for now; revisit after play-testing |
 | 15 Oct 2026 | M2 play-tested: works as expected. Mutations feel very strong (Phase + Armoured + Wraparound is near-invincible on open boards), but balance is deferred to M6 until the M3–M5 threats exist to balance against |
 
 ---
@@ -405,5 +408,5 @@ Each milestone is a playable release. Tick items as they're done and note the ve
 - Exact Brake trigger timing (250ms hold, 10px drift) — check on the phone that it doesn't misfire when starting a swipe slowly.
 - There's no way to quit mid-floor on the phone (only "Abandon run" on the intro card). Add a pause button if it's missed.
 - Should food after the exit opens be worth more (or less) than normal?
-- Is 16×16 big enough once walls and beetles arrive, or should Act 3 boards go to 18×18?
+- Is 16×16 big enough once walls and beetles arrive? Staying at 16×16 for M3 (Stuart suspects it'll prove cramped); revisit after M3 play-testing.
 - Bits economy: how many runs should it take to unlock Constrictor? Target roughly 4–6.
