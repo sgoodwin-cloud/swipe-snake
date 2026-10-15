@@ -2,7 +2,7 @@
 
 The single source of truth for Swipe Snake: what the game is, how the code is laid out, how releases work, and what's planned. Update this file whenever a decision is made or a milestone moves, so any new chat session can pick up from here.
 
-_Last updated: 14 Oct 2026 · Current release: v8 (Milestone 2: the draft) on `main` · Next: Milestone 3_
+_Last updated: 15 Oct 2026 · Current release: v8 (Milestone 2: the draft) on `main` · Next: Milestone 3_
 
 ---
 
@@ -334,7 +334,7 @@ Each milestone is a playable release. Tick items as they're done and note the ve
 - [x] 12 mutations from Body, Appetite, Movement & Brake, most stacking to II/III (v8)
 - [x] Draft weighting towards held families (v8)
 - [x] Run summary shows the build (v8)
-- [ ] Play-test on the iPhone: are any mutations useless or overpowered?
+- [x] Play-test on the iPhone (15 Oct 2026): working; balance deferred to M6
 
 ### ☐ M3 — Acts and threats
 - [ ] Spiked mutation (needs Beetles, so it lands with them)
@@ -356,7 +356,7 @@ Each milestone is a playable release. Tick items as they're done and note the ve
 - [ ] Ouroboros finale
 
 ### ☐ M6 — Balance and polish
-- [ ] Tuning pass on all numbers
+- [ ] Tuning pass on all numbers (known: Phase + Armoured + Wraparound is near-invincible on open boards; re-check once threats exist)
 - [ ] Run history and stats screen
 - [ ] More music tracks and cosmetics
 
@@ -396,6 +396,7 @@ Each milestone is a playable release. Tick items as they're done and note the ve
 | 14 Oct 2026 | M2: Armoured's snapped-off tail just vanishes (answers the open question) |
 | 14 Oct 2026 | M2: Phase is used before Armoured when both are held, so you keep your length |
 | 14 Oct 2026 | M2: released straight to `main` (no branch) after M1 went smoothly |
+| 15 Oct 2026 | M2 play-tested: works as expected. Mutations feel very strong (Phase + Armoured + Wraparound is near-invincible on open boards), but balance is deferred to M6 until the M3–M5 threats exist to balance against |
 
 ---
 
