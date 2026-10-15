@@ -2,7 +2,7 @@
 
 The single source of truth for Swipe Snake: what the game is, how the code is laid out, how releases work, and what's planned. Update this file whenever a decision is made or a milestone moves, so any new chat session can pick up from here.
 
-_Last updated: 15 Oct 2026 · Current release: v8 (Milestone 2: the draft) on `main` · Next: Milestone 3_
+_Last updated: 15 Oct 2026 · Current release: v9 (Milestone 3: acts and threats) on `main` · Next: Milestone 4_
 
 ---
 
@@ -34,31 +34,32 @@ These are settled. Don't break them without a deliberate decision logged in §9.
 
 ---
 
-## 3. Current state (v8, Milestone 2)
+## 3. Current state (v9, Milestone 3)
 
 **Title screen** with Run, Classic and a Sound toggle; the HUD shows runs, best floor reached and classic best.
 
-**Run mode** (§6.1–6.4):
-- 9 floors in 3 acts. Each floor opens on an intro card ("Floor N · Act A · eat X, then exit", plus the mutation just gained) and waits for a swipe, so you can plan before moving. An "Abandon run" button sits on the intro card (counts as a run ended).
+**Run mode** (§6.1–6.5):
+- 9 floors in 3 acts. Each floor opens on an intro card ("Floor N · Act A · eat X, then exit", the mutation just gained, and that floor's threats, e.g. "2 beetles · portals · shrinks at 5 food") and waits for a swipe, so you can plan before moving. An "Abandon run" button sits on the intro card (counts as a run ended).
 - Food targets 6/8/10 by act; act speeds 160/145/130ms per move. Snake resets to length 3 each floor.
 - Hitting the target opens an **exit** (hollow blinking tile, at least 5 tiles from the head where possible) with a sweep and jingle. Food **keeps spawning** after the exit opens, so you can risk extra pickups for score before leaving.
 - Scoring: food = 10 × act number; floor clear = 20 × floor number; winning = +100.
 - HUD: Score · Floor n/9 · Food eaten/target. Brake meter (12 segments) under the board.
-- Death → shake and flash (~0.75s) → results screen (floor fallen on, score, new best, and the build). Winning floor 9 → "YOU WIN" results.
+- Death → shake and flash (~0.75s) → results screen (floor, cause of death — hit a wall / bit yourself / caught by a beetle / crushed by the shrink / abandoned — score, new best, and the build). Winning floor 9 → "YOU WIN" results.
 - **Draft** after floors 1–8: "MUTATE" screen with 3 cards (name + level, family, effect). Tap a card (or press 1/2/3); the cleared board stays dimmed underneath and the row below shows the clear bonus. Cards ignore taps for 0.6s so a swipe that just finished the floor can't pick by accident.
-- Score popups (+value, combo ×n, PHASE, SNAP) rise from the snake. Phase/Armour charges show beside the brake meter when held. Wraparound draws a dashed board edge. Golden food is a ringed square that blinks before fading.
+- Score popups (+value, combo ×n, PHASE, SNAP) rise from the snake. Phase/Armour charges show beside the brake meter when held. Wraparound draws dashes on every stretch of edge you can cross. Golden food is a ringed square that blinks before fading.
 
-**Mutations (v8 pool, 12):** most stack to II or III; maxed ones stop being offered. Numbers live in `CFG.mut`.
+**Mutations (v9 pool, 13):** most stack to II or III; maxed ones stop being offered. Numbers live in `CFG.mut`.
 
 | Mutation | Family | Max | Effect |
 |---|---|---|---|
 | Phase | Movement | II | Pass through your own body once (II: twice) per floor |
-| Wraparound | Movement | I | Leave one edge, come back on the opposite side |
+| Wraparound | Movement | I | Cross any edge where neither side is walled, come back on the opposite side |
 | Deep Tank | Movement | II | Brake meter +50% per level |
 | Quick Recovery | Movement | II | Brake refills ×2 (II: ×3) as fast |
 | Cold Blood | Movement | II | Food eaten while braking ×2 (II: ×3) |
 | Armoured | Body | II | Once (II: twice) per floor, biting yourself snaps the tail off at that point instead of killing you; the lost tail vanishes |
 | Battery | Body | III | +4% food value per tail segment beyond 3, per level |
+| Spiked | Body | II | A beetle that walks into your body dies: +2× (II: 4×) the act's base food value |
 | Lean | Body | I | Every other bite doesn't grow your tail |
 | Magnet | Appetite | III | Food within 3/4/5 tiles drifts one tile towards your head every 2 moves |
 | Golden Hour | Appetite | III | 20/32/45% of food spawns golden: ×3 value, fades after 45 moves |
@@ -66,6 +67,22 @@ These are settled. Don't break them without a deliberate decision logged in §9.
 | Second Helping | Appetite | I | Each food counts 2 towards the target; tail grows by 2 |
 
 Rules: if both are held, Phase is spent before Armoured. Value order: base (10 × act, ×3 if golden) → Battery → Cold Blood → Gourmet bonus. Draft weighting: each option's weight is 1 + 0.6 × mutations you already hold in its family. Classic mode never sees mutations.
+
+**Floors and threats (v9):**
+
+| Floor | Layout pool | Beetles | Portals | Shrinks |
+|---|---|---|---|---|
+| 1 | Open field | – | – | – |
+| 2–3 | Pillars, Crossbars, Gatehouse | – | – | – |
+| 4 / 5 / 6 | Lanes, Brackets, Arena | 1 / 2 / 3 | – | – |
+| 7 / 8 | Divide, Crossroads, Gallery | 1 / 2 | yes | 8 only |
+| 9 | The Nest (fixed finale, provisional until Ouroboros in M5) | 2 | yes | yes |
+
+- **Layouts** are 16×16 text grids in `LAYOUTS` (`#` wall, `.` floor, letter pairs = portals); `FLOORS` says which pool, how many beetles and whether it shrinks. A run never repeats a layout while its pool has others left. Rows 7–9, columns 4–9 are always carved clear for the start. Gatehouse and Arena wall the edge, so Wraparound only works through Gatehouse's gaps and not at all in Arena.
+- **Walls** (drawn as bricks) kill on contact. Phase and Armoured don't help.
+- **Beetles** (a body with shuffling legs) patrol in a straight line, moving once per 2 snake moves (so Brake slows them too). They bounce off walls, edges, other beetles, food, the exit and your body. Head contact either way kills you. Never spawn within 5 tiles of your head or close to each other. They go through portals.
+- **Portals** (framed tile with a pulsing core; second pair has a hollow core). Enter one, come out of the cell just past its pair in the same direction. Portal cells themselves are never occupied. Beetles and Magnet-drifted food use them too.
+- **Shrink**: at half the food target, the outermost ring that isn't already solid flashes (and nothing spawns there) for 20 moves, then turns to wall with a thud. Anything of yours in it = death; beetles in it die; food and exit move; portals in it close.
 
 **Brake:** hold a finger still (within 10px) for 250ms; time runs at 50% until you lift. Swiping while held steers and keeps braking. Desktop: hold Space. Meter: 3s from full, refills in 6s; if emptied, it's locked until it refills to 25%. Board gets a faint dark tint and sounds drop in pitch while braking. Run mode only.
 
@@ -108,7 +125,7 @@ v7 also makes the reload wait for the new worker to report `activated` (plus `co
 | `DESIGN.md` | This document |
 | `CLAUDE.md` | Pointer for Claude sessions working in the repo |
 
-### 4.2 Inside `index.html` today (v6, ~600 lines)
+### 4.2 Inside `index.html` today (v9, ~1,250 lines)
 
 - **CSS tokens** on `:root`: `--case`, `--bezel`, `--lcd`, `--lcd-dim`, `--pixel`, `--ink`, `--muted`, plus font tokens. The canvas reads LCD colours from these at start-up.
 - **Markup:** `#hud` (filled per screen by `setHud`), `#board` with canvas + `#overlay` (`#ovTitle`, `#ovLines`, `#ovMsg`, `#ovMenu` buttons, filled by `showOverlay`), `.under` row holding the brake `#meter` or the `#hint`.
@@ -117,10 +134,10 @@ v7 also makes the reload wait for the new worker to report `activated` (plus `co
   2. RNG — `mulberry32`; each run has a seed, each floor gets its own rng drawn from the run's rng. Cosmetic effects use `Math.random` so they never disturb the game sequence.
   3. Save — `loadSave` / `migrate` / `writeSave`
   4. Screens — `setScreen(name, data)`; `SCREENS.title`, `SCREENS.play` (mode `run` or `classic`, phases `ready → playing → dying | cleared | over`), `SCREENS.results`. Each has `enter`, `update(dt, now)`, `input(action, arg)`, `hud()`, and a `board` flag for drawing. `SCREENS.draft` sits between floors (`play` → `draft` → `play`).
-  5. Run & board model — `run` (seed, rng, floor, score, `mutations: []`, `brakeMaxMs`) vs `game` (snake, food, exit, eaten, target, stepMs, accumulator). `step()` is one grid move; `eat`, `die`, `clearFloor`, `endRun`.
-  6. Content data — `MUTATIONS` (id, name, family, max, `text(level)`, `hooks`), `FAMILIES`, `draftOptions()` (weighted pick, seeded from the run rng), `buildText()`
-  7. Mutation hooks — `Hooks.emit` (onFloorStart, onEat, onStep, onSpawnFood), `Hooks.reduce` (foodValue, foodBonus, brakeMax, brakeRefill), `Hooks.first` (onSelfCollide → 'phase'/'snap', onWall → wrapped head). Hooks iterate in `MUTATIONS` order and do nothing outside a run. **Adding a mutation = adding one entry to `MUTATIONS`.**
-  8. Rendering — pre-rendered LCD background, `draw(now)`, `FX` (burst particles, exit sweep, shake offset)
+  5. Run & board model — `run` (seed, rng, floor, score, `mutations: {id: level}`, `build`, `usedLayouts`, `cause`) vs `game` (snake, food, exit, eaten, target, stepMs, accumulator, `walls` Uint8Array, `portals` Map, `pairs`, `beetles`, `shrink`). `travel(x, y, dir, who)` resolves one move through walls, portals and Wraparound for the snake, beetles and food alike. `step()` is one snake move, then beetles (`moveBeetles`) and the shrink (`updateShrink`). `die(won, cause)`, `clearFloor`, `endRun(won, cause)`.
+  6. Content data — `LAYOUTS`, `FLOORS`, `parseLayout()`; `MUTATIONS` (id, name, family, max, `text(level)`, `hooks`), `FAMILIES`, `draftOptions()` (weighted pick, seeded from the run rng), `buildText()`
+  7. Mutation hooks — `Hooks.emit` (onFloorStart, onEat, onStep, onSpawnFood), `Hooks.reduce` (foodValue, foodBonus, brakeMax, brakeRefill), `Hooks.first` (onSelfCollide → 'phase'/'snap', onWall → wrapped head, onBeetleTouch → points). Hooks iterate in `MUTATIONS` order and do nothing outside a run. **Adding a mutation = adding one entry to `MUTATIONS`.**
+  8. Rendering — pre-rendered LCD background, walls pre-rendered per floor (`renderWalls`, redone after a shrink), `draw(now)`, `FX` (burst particles, exit sweep, shake offset)
   9. Audio — `Audio` synth (`bite`, `death`, `exit`, `clear`, `win`, `brake`, `click`)
   - Brake — `Brake` object (held, meter, exhausted lock, meter UI)
   10. Input — touch (swipe + hold detection), keyboard, mouse; inputs become actions (`dir`, `go`, `run`, `classic`, `mute`, `menu`) sent to the current screen
@@ -336,12 +353,14 @@ Each milestone is a playable release. Tick items as they're done and note the ve
 - [x] Run summary shows the build (v8)
 - [x] Play-test on the iPhone (15 Oct 2026): working; balance deferred to M6
 
-### ☐ M3 — Acts and threats
-- [ ] Spiked mutation (needs Beetles, so it lands with them)
-- [ ] Wall layouts per act
-- [ ] Beetles (Act 2)
-- [ ] Portals and shrinking boards (Act 3)
-- [ ] Provisional floor 9 challenge
+### ☑ M3 — Acts and threats (v9)
+- [x] Spiked mutation (v9)
+- [x] Wall layouts per act: 3 per act + open floor 1 (v9)
+- [x] Beetles (Act 2, and fewer in Act 3 and the finale) (v9)
+- [x] Portals and shrinking boards (Act 3) (v9)
+- [x] Provisional floor 9 challenge: The Nest (v9)
+- [x] Death cause on the results screen (v9)
+- [ ] Play-test on the iPhone: difficulty curve, beetle speed, is 16×16 too cramped?
 
 ### ☐ M4 — The Workshop
 - [ ] Bits earned per run
@@ -399,6 +418,11 @@ Each milestone is a playable release. Tick items as they're done and note the ve
 | 15 Oct 2026 | M3: walls are a standard part of layouts, including along the board edge. Wraparound works only through edge cells that aren't walled |
 | 15 Oct 2026 | M3: beetles bounce off the snake's body as if it were a wall (herding tool; sets up Spiked and Constrictor) |
 | 15 Oct 2026 | M3: board stays 16×16 for now; revisit after play-testing |
+| 15 Oct 2026 | M3: portals send you out of the cell just past the pair, same direction; portal cells are never occupied. Beetles and Magnet food use them too |
+| 15 Oct 2026 | M3: shrink starts at half the food target (not a timer), warns for 20 moves (so Brake buys time) and closes the outermost ring that isn't already solid |
+| 15 Oct 2026 | M3: beetles move once per 2 snake moves and also bounce off food and the exit; beetle counts 1/2/3 in Act 2, 1/2 in Act 3, 2 in the finale |
+| 15 Oct 2026 | M3: Spiked pays 2× / 4× the act's food value per squashed beetle, as instant points (no pickup) |
+| 15 Oct 2026 | M3: floor 9 is a fixed hand-made finale (The Nest) until Ouroboros arrives in M5 |
 | 15 Oct 2026 | M2 play-tested: works as expected. Mutations feel very strong (Phase + Armoured + Wraparound is near-invincible on open boards), but balance is deferred to M6 until the M3–M5 threats exist to balance against |
 
 ---

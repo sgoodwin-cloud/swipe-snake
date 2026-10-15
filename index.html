@@ -141,7 +141,7 @@ body { margin: 0; }
     <div class="meter" id="meter" hidden><span>Brake</span><div class="segs" id="segs"></div><span class="charges" id="charges"></span></div>
     <p class="hint" id="hint">Swipe to steer · hold to brake</p>
   </div>
-  <p class="ver">v<span id="ver">8</span></p>
+  <p class="ver">v<span id="ver">9</span></p>
 </div>
 <button id="update" hidden>Update ready · tap to reload</button>
 
@@ -187,7 +187,10 @@ body { margin: 0; }
       gourmetBonus: 0.5,               // Gourmet: bonus = base value × this × combo
       deepTankPerLevel: 0.5,           // Deep Tank: +50% brake meter per level
       quickRecoveryPerLevel: 1,        // Quick Recovery: refill ×2 at level 1, ×3 at level 2
+      spikedMult: [2, 4],              // Spiked: squashed beetle = base food value × this, by level
     },
+    beetle: { everySteps: 2, minSpawnDist: 5 },   // beetles move once per N snake moves; never spawn this close to your head
+    shrink: { warnSteps: 20 },        // the ring flashes for this many moves (starts at half the food target), then closes
     fx: { burstCount: 8, burstMs: 380, shakeMs: 450, shakeCells: 0.35, deathMs: 750, exitSweepMs: 450, popupMs: 750 },
     inputLockMs: 600,                 // ignore buttons/swipes briefly after a game ends
   };
@@ -265,7 +268,7 @@ body { margin: 0; }
         onSelfCollide(l, c) { if (game.charges.phase > 0) { game.charges.phase--; return 'phase'; } return null; },
       } },
     { id: 'wrap', name: 'Wraparound', family: 'move', max: 1,
-      text: () => 'Leave one edge of the board and come back on the opposite side.',
+      text: () => 'Leave the board through any edge without a wall and come back on the other side.',
       hooks: { onWall(l, head) { return [(head[0] + N) % N, (head[1] + N) % N]; } } },
     { id: 'deeptank', name: 'Deep Tank', family: 'move', max: 2,
       text: () => 'Brake meter holds 50% more.',
@@ -286,6 +289,9 @@ body { margin: 0; }
     { id: 'battery', name: 'Battery', family: 'body', max: 3,
       text: () => 'Every tail segment adds 4% to the value of food.',
       hooks: { foodValue(v, l, c) { return v * (1 + CFG.mut.batteryPerSeg * l * Math.max(0, c.len - CFG.run.startLength)); } } },
+    { id: 'spiked', name: 'Spiked', family: 'body', max: 2,
+      text: l => 'Beetles that walk into your body die. +' + CFG.mut.spikedMult[l - 1] + '× food value each.',
+      hooks: { onBeetleTouch(l) { return CFG.run.foodPoints * actOf(run.floor) * CFG.mut.spikedMult[l - 1]; } } },
     { id: 'lean', name: 'Lean', family: 'body', max: 1,
       text: () => 'Every other bite doesn’t grow your tail.',
       hooks: { onEat(l, info) { game.leanSkip = !game.leanSkip; if (game.leanSkip) info.grow = Math.max(0, info.grow - 1); } } },
@@ -308,12 +314,102 @@ body { margin: 0; }
   ];
   const MUT = Object.fromEntries(MUTATIONS.map(m => [m.id, m]));
 
+  /* ---- Floor layouts (§6.5). 16 rows × 16 characters:
+   *   #  wall          .  floor          A, B …  portal pair (two of each letter)
+   * An empty map is an open board. Rows 7–9, columns 4–9 are always cleared for the
+   * snake's start. Walls can sit on the edge: Wraparound only works where they don't. */
+  const LAYOUTS = {
+    open: [{ name: 'Open field', map: [] }],
+    act1: [
+      { name: 'Pillars', map: [
+        '................', '................', '................', '...##......##...',
+        '...##......##...', '................', '................', '................',
+        '................', '................', '................', '...##......##...',
+        '...##......##...', '................', '................', '................'] },
+      { name: 'Crossbars', map: [
+        '................', '................', '................', '................',
+        '....########....', '................', '................', '................',
+        '................', '................', '................', '................',
+        '....########....', '................', '................', '................'] },
+      { name: 'Gatehouse', map: [
+        '######....######', '#..............#', '#..............#', '#..............#',
+        '#..............#', '#..............#', '................', '................',
+        '................', '................', '#..............#', '#..............#',
+        '#..............#', '#..............#', '#..............#', '######....######'] },
+    ],
+    act2: [
+      { name: 'Lanes', map: [
+        '................', '................', '..#..........#..', '..#..........#..',
+        '..#..........#..', '..#..........#..', '................', '................',
+        '................', '................', '..#..........#..', '..#..........#..',
+        '..#..........#..', '..#..........#..', '................', '................'] },
+      { name: 'Brackets', map: [
+        '................', '.#####....#####.', '.#............#.', '.#............#.',
+        '................', '................', '................', '................',
+        '................', '................', '................', '................',
+        '.#............#.', '.#............#.', '.#####....#####.', '................'] },
+      { name: 'Arena', map: [
+        '################', '#..............#', '#..............#', '#...##....##...#',
+        '#...##....##...#', '#..............#', '#..............#', '#..............#',
+        '#..............#', '#..............#', '#..............#', '#...##....##...#',
+        '#...##....##...#', '#..............#', '#..............#', '################'] },
+    ],
+    act3: [
+      { name: 'Divide', map: [
+        '............#...', '............#...', '..A.........#...', '............#...',
+        '............#...', '............#...', '................', '................',
+        '............#...', '............#...', '............#...', '............#...',
+        '............#...', '............#.A.', '............#...', '............#...'] },
+      { name: 'Crossroads', map: [
+        '................', '................', '..A..........B..', '................',
+        '.....#....#.....', '.....#....#.....', '................', '................',
+        '................', '................', '.....#....#.....', '.....#....#.....',
+        '................', '..B..........A..', '................', '................'] },
+      { name: 'Gallery', map: [
+        '................', '.##############.', '.A............B.', '................',
+        '................', '................', '................', '................',
+        '................', '................', '................', '................',
+        '................', '.B............A.', '.##############.', '................'] },
+    ],
+    finale: [
+      { name: 'The Nest', map: [
+        '................', '.###........###.', '.#............#.', '.#............#.',
+        '......##........', '...A............', '................', '................',
+        '................', '................', '............A...', '........##......',
+        '.#............#.', '.#............#.', '.###........###.', '................'] },
+    ],
+  };
+  // What each floor draws from. A layout isn't repeated within a run while its pool has others left.
+  const FLOORS = [
+    { pool: 'open' },
+    { pool: 'act1' }, { pool: 'act1' },
+    { pool: 'act2', beetles: 1 }, { pool: 'act2', beetles: 2 }, { pool: 'act2', beetles: 3 },
+    { pool: 'act3', beetles: 1 }, { pool: 'act3', beetles: 2, shrink: true },
+    { pool: 'finale', beetles: 2, shrink: true },
+  ];
+  function parseLayout(def) {
+    const walls = new Uint8Array(N * N), ends = {};
+    (def.map || []).forEach((row, y) => {
+      for (let x = 0; x < N; x++) {
+        const ch = row[x] || '.';
+        if (ch === '#') walls[y * N + x] = 1;
+        else if (ch >= 'A' && ch <= 'Z') (ends[ch] = ends[ch] || []).push([x, y]);
+      }
+    });
+    for (let y = 7; y <= 9; y++) for (let x = 4; x <= 9; x++) walls[y * N + x] = 0;
+    const portals = new Map(), pairs = [];
+    for (const e of Object.values(ends)) if (e.length === 2) {
+      portals.set(e[0][0] + ',' + e[0][1], e[1]); portals.set(e[1][0] + ',' + e[1][1], e[0]); pairs.push(e);
+    }
+    return { walls, portals, pairs };
+  }
+
   /* ====================================================================
    * 7. MUTATION HOOKS — mutations react to named events instead of being
    *    special-cased in the main loop. Only active during a run.
    *    emit(name, ctx)       fire and forget        (onFloorStart, onEat, onStep, onSpawnFood)
    *    reduce(name, v, ctx)  pass a value through  (foodValue, foodBonus, brakeMax, brakeRefill)
-   *    first(name, ctx)      first non-null answer (onSelfCollide, onWall)
+   *    first(name, ctx)      first non-null answer (onSelfCollide, onWall, onBeetleTouch)
    * ==================================================================== */
   const Hooks = {
     *each(name) {
@@ -418,6 +514,10 @@ body { margin: 0; }
       snap:  () => tone(320, 0.18, { type: 'sawtooth', vol: 0.06, slide: 0.35 }),
       phase: () => tone(420, 0.16, { type: 'triangle', vol: 0.08, slide: 2 }),
       pick:  () => seq([392, 523, 659], 0.07, { vol: 0.05 }),
+      portal: () => tone(300, 0.14, { type: 'triangle', vol: 0.07, slide: 3 }),
+      squash: () => { tone(180, 0.08, { vol: 0.07, slide: 0.5 }); tone(880, 0.05, { delay: 0.06 }); },
+      warn:  () => { tone(220, 0.1, { vol: 0.06 }); tone(220, 0.1, { vol: 0.06, delay: 0.18 }); },
+      shrink: () => tone(90, 0.3, { type: 'sawtooth', vol: 0.08, slide: 0.6 }),
     };
   })();
 
@@ -432,7 +532,7 @@ body { margin: 0; }
   function newRun() {
     const seed = newSeed();
     // mutations: { id: level }; build: ids in the order first picked (for display)
-    return { seed, rng: mulberry32(seed), floor: 1, score: 0, mutations: {}, build: [] };
+    return { seed, rng: mulberry32(seed), floor: 1, score: 0, mutations: {}, build: [], usedLayouts: [] };
   }
 
   function newBoard(mode) {
@@ -443,26 +543,135 @@ body { margin: 0; }
       snake: Array.from({ length: len }, (_, i) => [7 - i, 8]),
       dir: 'right', queue: [], food: null, foodGolden: false, foodTtl: 0, exit: null, eaten: 0, score: 0, acc: 0, phaseAt: 0,
       stepCount: 0, growPending: 0, lastEatStep: -1, combo: 0, leanSkip: false, charges: { phase: 0, armour: 0 },
+      walls: new Uint8Array(N * N), portals: new Map(), pairs: [], beetles: [], shrink: null, layoutName: '', cause: null,
     };
     game = g;
     if (mode === 'run') {
-      const act = actOf(run.floor);
+      const act = actOf(run.floor), fdef = FLOORS[run.floor - 1];
       g.target = CFG.run.targets[act - 1];
       g.stepMs = CFG.run.actStepMs[act - 1];
+      const all = LAYOUTS[fdef.pool], fresh = all.filter(l => !run.usedLayouts.includes(l.name));
+      const lay = pick(g.rng, fresh.length ? fresh : all);
+      run.usedLayouts.push(lay.name);
+      Object.assign(g, parseLayout(lay));
+      g.layoutName = lay.name;
+      if (fdef.shrink) g.shrink = { state: 'none', at: 0, ring: -1 };
+      for (let i = 0; i < (fdef.beetles || 0); i++) spawnBeetle();
       Hooks.emit('onFloorStart', g);
     } else g.stepMs = CFG.classic.stepMs;
+    wallsDirty = true;
     placeFood();
     return g;
   }
 
   const key = (x, y) => x + ',' + y;
+  const inBounds = (x, y) => x >= 0 && y >= 0 && x < N && y < N;
+  const ringOf = (x, y) => Math.min(x, y, N - 1 - x, N - 1 - y);
+  const beetleAt = (x, y) => game.beetles.find(b => b.x === x && b.y === y);
   function freeCells() {
     const taken = new Set(game.snake.map(([x, y]) => key(x, y)));
     if (game.food) taken.add(key(...game.food));
     if (game.exit) taken.add(key(...game.exit));
+    for (const b of game.beetles) taken.add(key(b.x, b.y));
+    const warnRing = game.shrink && game.shrink.state === 'warn' ? game.shrink.ring : -1;
     const free = [];
-    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if (!taken.has(key(x, y))) free.push([x, y]);
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      const k = key(x, y);
+      if (!taken.has(k) && !game.walls[y * N + x] && !game.portals.has(k) && ringOf(x, y) !== warnRing) free.push([x, y]);
+    }
     return free;
+  }
+
+  // Where something moving one tile from (x, y) ends up: through portals, and (for the
+  // snake with Wraparound) across open edges. Returns { c: [x, y], portal } or { block }.
+  function travel(x, y, [dx, dy], who) {
+    let nx = x + dx, ny = y + dy;
+    if (!inBounds(nx, ny)) {
+      const w = who === 'snake' ? Hooks.first('onWall', [nx, ny]) : null;
+      if (!w) return { block: 'wall' };
+      [nx, ny] = w;
+    }
+    if (game.walls[ny * N + nx]) return { block: 'wall' };
+    const p = game.portals.get(key(nx, ny));
+    if (p) {
+      nx = p[0] + dx; ny = p[1] + dy;
+      if (!inBounds(nx, ny) || game.walls[ny * N + nx] || game.portals.has(key(nx, ny))) return { block: 'wall' };
+      return { c: [nx, ny], portal: true };
+    }
+    return { c: [nx, ny] };
+  }
+
+  /* ---- Beetles: patrol in straight lines, bounce off walls, other beetles, food,
+   *      the exit and your body. Touching your head kills you. */
+  function spawnBeetle() {
+    const [hx, hy] = game.snake[0], dirs = Object.values(DIRS);
+    const spots = freeCells().filter(([x, y]) => Math.abs(x - hx) + Math.abs(y - hy) >= CFG.beetle.minSpawnDist
+      && !game.beetles.some(b => Math.abs(b.x - x) + Math.abs(b.y - y) < 3)
+      && dirs.some(d => travel(x, y, d, 'beetle').c));
+    if (!spots.length) return;
+    const [x, y] = pick(game.rng, spots);
+    const [dx, dy] = pick(game.rng, dirs.filter(d => travel(x, y, d, 'beetle').c));
+    game.beetles.push({ x, y, dx, dy, legs: 0 });
+  }
+  function beetleBlocked(c, self) {
+    if (!c) return 'block';
+    const [x, y] = c, i = game.snake.findIndex(([a, b]) => a === x && b === y);
+    if (i === 0) return 'head';
+    if (i > 0) return 'body';
+    if (game.beetles.some(o => o !== self && o.x === x && o.y === y)) return 'block';
+    if (game.food && game.food[0] === x && game.food[1] === y) return 'block';
+    if (game.exit && game.exit[0] === x && game.exit[1] === y) return 'block';
+    return null;
+  }
+  // Returns false if a beetle caught the snake.
+  function moveBeetles() {
+    for (const b of [...game.beetles]) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const mv = travel(b.x, b.y, [b.dx, b.dy], 'beetle');
+        const hit = beetleBlocked(mv.c, b);
+        if (hit === 'head') { die(false, 'beetle'); return false; }
+        if (hit === 'body') { const pts = Hooks.first('onBeetleTouch', b); if (pts) { squashBeetle(b, pts); break; } }
+        if (!hit) { b.x = mv.c[0]; b.y = mv.c[1]; b.legs ^= 1; break; }
+        b.dx = -b.dx; b.dy = -b.dy;   // bounce, then try the other way
+      }
+    }
+    return true;
+  }
+  function squashBeetle(b, pts) {
+    game.beetles.splice(game.beetles.indexOf(b), 1);
+    pts = Math.round(pts); run.score += pts;
+    FX.burst([b.x, b.y], 10); FX.popup([b.x, b.y], '+' + pts); Audio.squash();
+    screen.hud();
+  }
+
+  /* ---- Shrinking boards: at half the food target, the outermost ring that isn't
+   *      already solid flashes, then becomes wall. Anything caught in it is lost. */
+  function updateShrink() {
+    const s = game.shrink;
+    if (!s || s.state === 'done') return true;
+    if (s.state === 'none' && game.eaten >= Math.ceil(game.target / 2)) {
+      for (let k = 0; k < N / 2 && s.ring < 0; k++)
+        for (let y = 0; y < N && s.ring < 0; y++) for (let x = 0; x < N; x++) if (ringOf(x, y) === k && !game.walls[y * N + x]) { s.ring = k; break; }
+      if (s.ring < 0) { s.state = 'done'; return true; }
+      s.state = 'warn'; s.at = game.stepCount;
+      FX.popup([N / 2 - 0.5, N / 2 - 3], 'SHRINKING'); Audio.warn();
+      if (game.exit && ringOf(...game.exit) === s.ring) { game.exit = null; openExit(); }
+      return true;
+    }
+    if (s.state === 'warn' && game.stepCount - s.at >= CFG.shrink.warnSteps) {
+      s.state = 'done';
+      for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if (ringOf(x, y) === s.ring) {
+        game.walls[y * N + x] = 1;
+        const p = game.portals.get(key(x, y));
+        if (p) { game.portals.delete(key(x, y)); game.portals.delete(key(...p)); game.pairs = game.pairs.filter(e => !e.some(c => c[0] === x && c[1] === y)); }
+      }
+      wallsDirty = true; FX.shake(0.6); Audio.shrink();
+      if (game.snake.some(([x, y]) => ringOf(x, y) === s.ring)) { die(false, 'shrink'); return false; }
+      game.beetles = game.beetles.filter(b => { if (ringOf(b.x, b.y) !== s.ring) return true; FX.burst([b.x, b.y], 4); return false; });
+      if (game.food && ringOf(...game.food) === s.ring) placeFood();
+      if (game.exit && ringOf(...game.exit) === s.ring) { game.exit = null; openExit(); }
+    }
+    return true;
   }
   function placeFood() {
     game.food = null; game.foodGolden = false; game.foodTtl = 0;
@@ -470,18 +679,21 @@ body { margin: 0; }
     if (game.food && game.mode === 'run') Hooks.emit('onSpawnFood', game);
   }
   function cellFree(x, y) {
-    if (x < 0 || y < 0 || x >= N || y >= N) return false;
+    if (!inBounds(x, y) || game.walls[y * N + x] || game.portals.has(key(x, y)) || beetleAt(x, y)) return false;
     if (game.exit && game.exit[0] === x && game.exit[1] === y) return false;
     return !game.snake.some(([a, b]) => a === x && b === y);
   }
   // Magnet: every few moves, food within range takes one step towards the head (never onto it).
+  // Food that drifts into a portal comes out of its pair.
   function magnetPull(g, radius) {
     if (!g.food || g.stepCount % CFG.mut.magnetEvery) return;
     const [hx, hy] = g.snake[0], [fx, fy] = g.food, dx = hx - fx, dy = hy - fy, dist = Math.abs(dx) + Math.abs(dy);
     if (dist > radius || dist <= 1) return;
     const xs = [Math.sign(dx), 0], ys = [0, Math.sign(dy)];
     for (const [mx, my] of Math.abs(dx) >= Math.abs(dy) ? [xs, ys] : [ys, xs]) {
-      if ((mx || my) && cellFree(fx + mx, fy + my)) { g.food = [fx + mx, fy + my]; return; }
+      if (!mx && !my) continue;
+      const mv = travel(fx, fy, [mx, my], 'food');
+      if (mv.c && cellFree(...mv.c)) { g.food = mv.c; return; }
     }
   }
   function openExit() {
@@ -509,13 +721,11 @@ body { margin: 0; }
   function step() {
     if (game.queue.length) game.dir = game.queue.shift();
     game.stepCount++;
-    const [dx, dy] = DIRS[game.dir];
-    let head = [game.snake[0][0] + dx, game.snake[0][1] + dy];
-    if (head[0] < 0 || head[1] < 0 || head[0] >= N || head[1] >= N) {
-      const wrapped = Hooks.first('onWall', head);
-      if (!wrapped) { die(); return false; }
-      head = wrapped;
-    }
+    const mv = travel(game.snake[0][0], game.snake[0][1], DIRS[game.dir], 'snake');
+    if (mv.block) { die(false, 'wall'); return false; }
+    const head = mv.c;
+    if (mv.portal) Audio.portal();
+    if (beetleAt(...head)) { die(false, 'beetle'); return false; }
     const eating = game.food && head[0] === game.food[0] && head[1] === game.food[1];
     const tailStays = eating || game.growPending > 0;
     const body = tailStays ? game.snake : game.snake.slice(0, -1);
@@ -524,7 +734,7 @@ body { margin: 0; }
       const rescue = game.mode === 'run' ? Hooks.first('onSelfCollide', { index: hit }) : null;
       if (rescue === 'snap') snapTail(hit, head);
       else if (rescue === 'phase') { FX.popup(head, 'PHASE'); Audio.phase(); }
-      else { die(); return false; }
+      else { die(false, 'self'); return false; }
     }
     game.snake.unshift(head);
     if (game.exit && head[0] === game.exit[0] && head[1] === game.exit[1]) { game.snake.pop(); clearFloor(); return false; }
@@ -538,6 +748,8 @@ body { margin: 0; }
       Hooks.emit('onStep', game);
       if (game.foodGolden && --game.foodTtl <= 0) { game.foodGolden = false; game.foodTtl = 0; }
       showCharges();
+      if (game.beetles.length && game.stepCount % CFG.beetle.everySteps === 0 && !moveBeetles()) return false;
+      if (!updateShrink()) return false;
     }
     return true;
   }
@@ -588,8 +800,8 @@ body { margin: 0; }
     if (t !== chargesShown) { chargesShown = t; $('charges').textContent = t; }
   }
 
-  function die(won) {
-    game.phase = 'dying'; game.phaseAt = performance.now(); game.won = !!won;
+  function die(won, cause) {
+    game.phase = 'dying'; game.phaseAt = performance.now(); game.won = !!won; game.cause = cause || null;
     if (won) Audio.win(); else { Audio.death(); FX.shake(); }
   }
 
@@ -600,8 +812,10 @@ body { margin: 0; }
     Audio.clear(); screen.hud();
   }
 
-  function endRun(won) {
+  const CAUSES = { wall: 'hit a wall', self: 'bit yourself', beetle: 'caught by a beetle', shrink: 'crushed by the shrink', abandon: 'abandoned' };
+  function endRun(won, cause) {
     if (won) run.score += CFG.run.winBonus;
+    run.cause = cause;
     const st = save.stats;
     st.runs++; if (won) st.wins++;
     st.bestFloor = Math.max(st.bestFloor, run.floor);
@@ -642,7 +856,24 @@ body { margin: 0; }
   /* ====================================================================
    * 8. RENDERING — canvas, particles, screen shake
    * ==================================================================== */
-  let cell = 20, bg = null;
+  let cell = 20, bg = null, wallLayer = null, wallsDirty = true;
+  // Walls are static, so draw them once per floor (and again after a shrink) as bricks.
+  function renderWalls() {
+    wallsDirty = false;
+    if (!wallLayer || wallLayer.width !== canvas.width) { wallLayer = document.createElement('canvas'); wallLayer.width = canvas.width; wallLayer.height = canvas.height; }
+    const w = wallLayer.getContext('2d');
+    w.clearRect(0, 0, wallLayer.width, wallLayer.height);
+    if (!game) return;
+    const m = Math.max(1, cell * 0.07);
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if (game.walls[y * N + x]) {
+      const X = x * cell, Y = y * cell;
+      w.fillStyle = C.px; w.fillRect(X, Y, cell, cell);
+      w.fillStyle = C.dim;   // mortar: one course line and staggered joints
+      w.fillRect(X, Y + cell / 2 - m / 2, cell, m);
+      w.fillRect(X + cell / 2 - m / 2, Y + m, m, cell / 2 - m * 1.5);
+      w.fillRect(X + (x % 2 ? cell - m : 0), Y + cell / 2 + m / 2, m, cell / 2 - m);
+    }
+  }
   function resize() {
     const size = board.clientWidth, dpr = window.devicePixelRatio || 1;
     canvas.width = Math.round(size * dpr); canvas.height = Math.round(size * dpr);
@@ -654,6 +885,7 @@ body { margin: 0; }
     b.fillStyle = C.dim;
     const p = cell * 0.08;
     for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) b.fillRect(x * cell + p, y * cell + p, cell - 2 * p, cell - 2 * p);
+    wallsDirty = true;
   }
   function block(x, y, inset, color) {
     const p = cell * inset;
@@ -722,6 +954,27 @@ body { margin: 0; }
     const [ox, oy] = FX.offset(now);
     ctx.translate(ox, oy);
     if (game && screen.board) {
+      if (wallsDirty) renderWalls();
+      ctx.drawImage(wallLayer, 0, 0);
+      const s = game.shrink;
+      if (s && s.state === 'warn' && Math.floor(now / 160) % 2 === 0) {
+        ctx.globalAlpha = 0.5;
+        for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if (ringOf(x, y) === s.ring && !game.walls[y * N + x]) block(x, y, 0.16, C.px);
+        ctx.globalAlpha = 1;
+      }
+      game.pairs.forEach((pair, i) => pair.forEach(([x, y]) => {
+        // portals: a frame with a pulsing core; the second pair has a hollow core
+        frameCell(x, y, 0.04, 0.12);
+        const k = 0.3 + 0.06 * Math.sin(now / 160 + i * 1.7);
+        if (i % 2) frameCell(x, y, k, 0.1); else block(x, y, k, C.px);
+      }));
+      for (const b of game.beetles) {
+        // beetles: a round-ish body with legs that shuffle each move
+        block(b.x, b.y, 0.26, C.px);
+        const L = cell * 0.14, o = cell * (b.legs ? 0.08 : 0.14), X = b.x * cell, Y = b.y * cell;
+        ctx.fillRect(X + o, Y + o, L, L); ctx.fillRect(X + cell - o - L, Y + o, L, L);
+        ctx.fillRect(X + o, Y + cell - o - L, L, L); ctx.fillRect(X + cell - o - L, Y + cell - o - L, L, L);
+      }
       if (game.exit) {
         const on = game.phase === 'cleared' ? Math.floor(now / 80) % 2 === 0 : Math.floor(now / 300) % 2 === 0;
         frameCell(game.exit[0], game.exit[1], 0.06, 0.16);
@@ -735,9 +988,13 @@ body { margin: 0; }
         } else block(fx, fy, 0.28, C.px);
       }
       if (run && run.mutations.wrap && game.mode === 'run') {
-        // Wraparound: dashed board edge = the walls are open
-        ctx.save(); ctx.strokeStyle = C.px; ctx.lineWidth = cell * 0.08; ctx.setLineDash([cell * 0.35, cell * 0.35]);
-        ctx.strokeRect(ctx.lineWidth / 2, ctx.lineWidth / 2, canvas.width - ctx.lineWidth, canvas.height - ctx.lineWidth); ctx.restore();
+        // Wraparound: a dash on every stretch of edge you can cross (both sides open)
+        const t = cell * 0.08, W = game.walls, E = N - 1;
+        ctx.fillStyle = C.px;
+        for (let i = 0; i < N; i++) {
+          if (!W[i] && !W[E * N + i]) { ctx.fillRect(i * cell + cell * 0.25, 0, cell * 0.5, t); ctx.fillRect(i * cell + cell * 0.25, canvas.height - t, cell * 0.5, t); }
+          if (!W[i * N] && !W[i * N + E]) { ctx.fillRect(0, i * cell + cell * 0.25, t, cell * 0.5); ctx.fillRect(canvas.width - t, i * cell + cell * 0.25, t, cell * 0.5); }
+        }
       }
       const flashing = game.phase === 'dying' && !game.won && Math.floor((now - game.phaseAt) / 90) % 2 === 1;
       if (!flashing) game.snake.forEach(([x, y], i) => block(x, y, i === 0 ? 0.04 : 0.1, C.px));
@@ -801,7 +1058,12 @@ body { margin: 0; }
           const lines = [];
           if (d.picked) lines.push('Gained ' + MUT[d.picked].name + roman(run.mutations[d.picked]));
           lines.push('Act ' + act + ' · eat ' + game.target + ', then exit');
-          showOverlay({ title: 'FLOOR ' + run.floor, lines, blink: 'Swipe to start', buttons: [{ label: 'Abandon run', cls: 'ghost', fn: () => endRun(false) }] });
+          const threats = [];
+          if (game.beetles.length) threats.push(game.beetles.length === 1 ? '1 beetle' : game.beetles.length + ' beetles');
+          if (game.pairs.length) threats.push('portals');
+          if (game.shrink) threats.push('shrinks at ' + Math.ceil(game.target / 2) + ' food');
+          if (threats.length) lines.push(threats.join(' · '));
+          showOverlay({ title: 'FLOOR ' + run.floor, lines, blink: 'Swipe to start', buttons: [{ label: 'Abandon run', cls: 'ghost', fn: () => endRun(false, 'abandon') }] });
         } else {
           this.hud = () => setHud([['Score', game.score], ['Best', save.stats.classicBest]]);
           setUnder('Swipe anywhere on screen · arrow keys work too');
@@ -815,7 +1077,7 @@ body { margin: 0; }
           game.acc += dt * (Brake.active() ? CFG.brake.timeScale : 1);
           while (game.acc >= game.stepMs && game.phase === 'playing') { game.acc -= game.stepMs; if (!step()) break; }
         } else if (game.phase === 'dying' && now - game.phaseAt >= CFG.fx.deathMs) {
-          if (game.mode === 'run') endRun(false); else this.classicOver();
+          if (game.mode === 'run') endRun(false, game.cause); else this.classicOver();
         } else if (game.phase === 'cleared' && now - game.phaseAt >= CFG.run.clearPauseMs) {
           if (run.floor >= CFG.run.floors) endRun(true);
           else setScreen('draft', { cleared: run.floor, bonus: game.bonus });
@@ -885,7 +1147,8 @@ body { margin: 0; }
         this.hud = () => setHud([['Score', d.score], ['Best', st.bestRunScore]]);
         this.hud();
         setUnder('Runs ' + st.runs + ' · wins ' + st.wins);
-        const lines = d.won ? ['All 9 floors cleared'] : ['Fell on floor ' + d.floor + ' · act ' + actOf(d.floor)];
+        const why = CAUSES[run.cause];
+        const lines = d.won ? ['All 9 floors cleared'] : ['Floor ' + d.floor + (why ? ' · ' + why : '')];
         lines.push('Score ' + d.score + (d.newBest ? ' · new best!' : ''));
         lines.push({ text: buildText(), cls: 'build' });
         showOverlay({
@@ -975,13 +1238,13 @@ body { margin: 0; }
   requestAnimationFrame(frame);
 
   // test hook (harmless in production)
-  window.__snake = { get game() { return game; }, get run() { return run; }, get screen() { return screenName; }, get opts() { return screen.opts; }, save, Brake, setScreen, MUT, draftOptions, step };
+  window.__snake = { get game() { return game; }, get run() { return run; }, get screen() { return screenName; }, get opts() { return screen.opts; }, save, Brake, setScreen, MUT, draftOptions, step, LAYOUTS, FLOORS, parseLayout, moveBeetles };
 })();
 </script>
 
 <script>
 // Offline support + update banner
-const APP_VERSION = '8';
+const APP_VERSION = '9';
 document.getElementById('ver').textContent = APP_VERSION;
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', async () => {
