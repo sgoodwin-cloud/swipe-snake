@@ -98,10 +98,11 @@ canvas { display: block; width: 100%; height: 100%; border-radius: 3px; }
 .card .cd { grid-column: 1 / -1; font-family: var(--f-digits); font-size: 18px; line-height: 1; }
 .menu.cards button.card { padding: 7px 10px; }
 .overlay .build { font-size: 18px; line-height: 1.1; max-width: 300px; }
-.charges { font-family: var(--f-display); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink); }
-.under { display: flex; justify-content: center; align-items: center; gap: 10px; min-height: 24px; }
+.charges { flex-basis: 100%; text-align: center; font-family: var(--f-display); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink); }
+.charges:empty { display: none; }
+.under { display: flex; justify-content: center; align-items: center; gap: 10px; min-height: 42px; }
 .hint { text-align: center; font-size: 19px; color: var(--muted); margin: 0; }
-.meter { display: flex; align-items: center; gap: 8px; font-family: var(--f-display); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.meter { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 4px 8px; font-family: var(--f-display); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
 .segs { display: flex; gap: 3px; }
 .segs i { width: 12px; height: 14px; background: var(--bezel); border-radius: 1px; }
 .segs i.on { background: var(--lcd); }
@@ -141,7 +142,7 @@ body { margin: 0; }
     <div class="meter" id="meter" hidden><span>Brake</span><div class="segs" id="segs"></div><span class="charges" id="charges"></span></div>
     <p class="hint" id="hint">Swipe to steer · hold to brake</p>
   </div>
-  <p class="ver">v<span id="ver">9</span></p>
+  <p class="ver">v<span id="ver">10</span></p>
 </div>
 <button id="update" hidden>Update ready · tap to reload</button>
 
@@ -178,16 +179,22 @@ body { margin: 0; }
     queueMax: 2,
     draft: { choices: 3, familyBias: 0.6 },   // weight = 1 + familyBias × mutations already held in that family
     mut: {
-      batteryPerSeg: 0.04,             // Battery: +4% food value per segment beyond start length, per level
+      batteryEvery: 5,                 // Battery: every N tail segments beyond the start length…
+      batteryMs: [500, 1000],          // …add this much Brake (ms), by level
       magnetRadius: [3, 4, 5],         // Magnet: pull range in tiles (Manhattan), by level
       magnetEvery: 2,                  // Magnet: food drifts one tile every N moves
       goldenChance: [0.2, 0.32, 0.45], // Golden Hour: chance a new food spawns golden, by level
-      goldenMult: 3, goldenSteps: 45,  // golden food value × and how many moves before it fades
-      gourmetWindow: [14, 20, 26],     // Gourmet: max moves between bites to keep a combo, by level
-      gourmetBonus: 0.5,               // Gourmet: bonus = base value × this × combo
+      goldenCount: 3, goldenSteps: 45, // golden food counts this many towards the target; fades after N moves
+      goldenMult: 3,                   // (score only) golden food is worth ×3 points
+      gourmetWindow: [14, 20, 26],     // Gourmet: bites within this many moves of the last one…
+      gourmetRefill: 0.35,             // …refill this fraction of the Brake meter
       deepTankPerLevel: 0.5,           // Deep Tank: +50% brake meter per level
       quickRecoveryPerLevel: 1,        // Quick Recovery: refill ×2 at level 1, ×3 at level 2
-      spikedMult: [2, 4],              // Spiked: squashed beetle = base food value × this, by level
+      spikedCount: [1, 2],             // Spiked: a squashed beetle counts this much towards the target, by level
+      spikedMult: 2,                   // (score only) squashed beetle = base food value × this
+      banquetFood: [2, 3],             // Banquet: pieces of food on the board at once, by level
+      shortcut: [1, 2], minTarget: 2,  // Shortcut: floor target reduced by this, never below minTarget
+      burrowDepth: 3,                  // Burrow: tunnels through up to this many wall tiles in a line
     },
     beetle: { everySteps: 2, minSpawnDist: 5 },   // beetles move once per N snake moves; never spawn this close to your head
     shrink: { warnSteps: 20 },        // the ring flashes for this many moves (starts at half the food target), then closes
@@ -270,6 +277,12 @@ body { margin: 0; }
     { id: 'wrap', name: 'Wraparound', family: 'move', max: 1,
       text: () => 'Leave the board through any edge without a wall and come back on the other side.',
       hooks: { onWall(l, head) { return [(head[0] + N) % N, (head[1] + N) % N]; } } },
+    { id: 'burrow', name: 'Burrow', family: 'move', max: 2,
+      text: l => l === 1 ? 'Tunnel through a wall once per floor. Not the board edge.' : 'Tunnel through walls twice per floor.',
+      hooks: {
+        onFloorStart(l, g) { g.charges.burrow = l; },
+        onWallHit(l, c) { if (game.charges.burrow <= 0) return null; const out = burrowExit(c); if (out) game.charges.burrow--; return out; },
+      } },
     { id: 'deeptank', name: 'Deep Tank', family: 'move', max: 2,
       text: () => 'Brake meter holds 50% more.',
       hooks: { brakeMax(v, l) { return v * (1 + CFG.mut.deepTankPerLevel * l); } } },
@@ -277,8 +290,11 @@ body { margin: 0; }
       text: l => l === 1 ? 'Brake meter refills twice as fast.' : 'Brake meter refills three times as fast.',
       hooks: { brakeRefill(v, l) { return v / (1 + CFG.mut.quickRecoveryPerLevel * l); } } },
     { id: 'coldblood', name: 'Cold Blood', family: 'move', max: 2,
-      text: l => l === 1 ? 'Food eaten while braking is worth double.' : 'Food eaten while braking is worth triple.',
-      hooks: { foodValue(v, l, c) { return c.braking ? v * (1 + l) : v; } } },
+      text: l => 'Food eaten while braking counts ' + (l === 1 ? 'double' : 'triple') + ' towards the floor target.',
+      hooks: { onEat(l, info) { if (info.braking) info.count *= 1 + l; } } },
+    { id: 'tremor', name: 'Tremor', family: 'move', max: 1,
+      text: () => 'Beetles freeze while you brake.',
+      hooks: { freezeBeetles() { return Brake.active() || null; } } },
     // ---- Body
     { id: 'armoured', name: 'Armoured', family: 'body', max: 2,
       text: l => l === 1 ? 'Once per floor, biting yourself snaps your tail off instead of killing you.' : 'Snap your tail off twice per floor.',
@@ -286,31 +302,34 @@ body { margin: 0; }
         onFloorStart(l, g) { g.charges.armour = l; },
         onSelfCollide(l, c) { if (game.charges.armour > 0) { game.charges.armour--; return 'snap'; } return null; },
       } },
-    { id: 'battery', name: 'Battery', family: 'body', max: 3,
-      text: () => 'Every tail segment adds 4% to the value of food.',
-      hooks: { foodValue(v, l, c) { return v * (1 + CFG.mut.batteryPerSeg * l * Math.max(0, c.len - CFG.run.startLength)); } } },
+    { id: 'battery', name: 'Battery', family: 'body', max: 2,
+      text: l => 'Every ' + CFG.mut.batteryEvery + ' tail segments add ' + CFG.mut.batteryMs[l - 1] / 1000 + 's to your Brake meter.',
+      hooks: { brakeBonus(v, l, c) { return v + Math.floor(Math.max(0, c.len - CFG.run.startLength) / CFG.mut.batteryEvery) * CFG.mut.batteryMs[l - 1]; } } },
     { id: 'spiked', name: 'Spiked', family: 'body', max: 2,
-      text: l => 'Beetles that walk into your body die. +' + CFG.mut.spikedMult[l - 1] + '× food value each.',
-      hooks: { onBeetleTouch(l) { return CFG.run.foodPoints * actOf(run.floor) * CFG.mut.spikedMult[l - 1]; } } },
+      text: l => 'Beetles that walk into your body die. Each counts as ' + (l === 1 ? 'a food' : '2 food') + ' towards the target.',
+      hooks: { onBeetleTouch(l) { return CFG.mut.spikedCount[l - 1]; } } },
     { id: 'lean', name: 'Lean', family: 'body', max: 1,
       text: () => 'Every other bite doesn’t grow your tail.',
       hooks: { onEat(l, info) { game.leanSkip = !game.leanSkip; if (game.leanSkip) info.grow = Math.max(0, info.grow - 1); } } },
     // ---- Appetite
+    { id: 'banquet', name: 'Banquet', family: 'appetite', max: 2,
+      text: l => CFG.mut.banquetFood[l - 1] + ' pieces of food on the board at once.',
+      hooks: { foodCount(v, l) { return Math.max(v, CFG.mut.banquetFood[l - 1]); } } },
+    { id: 'shortcut', name: 'Shortcut', family: 'appetite', max: 2,
+      text: l => 'Every floor\u2019s food target is ' + CFG.mut.shortcut[l - 1] + ' lower.',
+      hooks: { floorTarget(v, l) { return Math.max(CFG.mut.minTarget, v - CFG.mut.shortcut[l - 1]); } } },
     { id: 'magnet', name: 'Magnet', family: 'appetite', max: 3,
       text: l => 'Food within ' + CFG.mut.magnetRadius[l - 1] + ' tiles drifts towards your head.',
       hooks: { onStep(l, g) { magnetPull(g, CFG.mut.magnetRadius[l - 1]); } } },
     { id: 'golden', name: 'Golden Hour', family: 'appetite', max: 3,
-      text: l => Math.round(CFG.mut.goldenChance[l - 1] * 100) + '% of food spawns golden: worth ×3, but it fades.',
-      hooks: { onSpawnFood(l, g) { if (g.rng() < CFG.mut.goldenChance[l - 1]) { g.foodGolden = true; g.foodTtl = CFG.mut.goldenSteps; } } } },
+      text: l => Math.round(CFG.mut.goldenChance[l - 1] * 100) + '% of food spawns golden: counts ' + CFG.mut.goldenCount + ' towards the target, but fades.',
+      hooks: { onSpawnFood(l, f) { if (game.rng() < CFG.mut.goldenChance[l - 1]) { f.golden = true; f.ttl = CFG.mut.goldenSteps; } } } },
     { id: 'gourmet', name: 'Gourmet', family: 'appetite', max: 3,
-      text: l => 'Bites within ' + CFG.mut.gourmetWindow[l - 1] + ' moves of each other build a combo.',
-      hooks: { foodBonus(v, l, c) {
-        if (game.lastEatStep >= 0 && c.gap <= CFG.mut.gourmetWindow[l - 1]) { game.combo++; return v + c.base * CFG.mut.gourmetBonus * game.combo; }
-        game.combo = 0; return v;
-      } } },
+      text: l => 'Bites within ' + CFG.mut.gourmetWindow[l - 1] + ' moves of each other refill a third of your Brake.',
+      hooks: { onEat(l, info) { if (info.gap <= CFG.mut.gourmetWindow[l - 1] && Brake.refill(CFG.mut.gourmetRefill)) info.tags.push('BRAKE'); } } },
     { id: 'second', name: 'Second Helping', family: 'appetite', max: 1,
       text: () => 'Each food counts double towards the floor target, but your tail grows by 2.',
-      hooks: { onEat(l, info) { info.count = 2; info.grow += 1; } } },
+      hooks: { onEat(l, info) { info.count *= 2; info.grow += 1; } } },
   ];
   const MUT = Object.fromEntries(MUTATIONS.map(m => [m.id, m]));
 
@@ -408,8 +427,8 @@ body { margin: 0; }
    * 7. MUTATION HOOKS — mutations react to named events instead of being
    *    special-cased in the main loop. Only active during a run.
    *    emit(name, ctx)       fire and forget        (onFloorStart, onEat, onStep, onSpawnFood)
-   *    reduce(name, v, ctx)  pass a value through  (foodValue, foodBonus, brakeMax, brakeRefill)
-   *    first(name, ctx)      first non-null answer (onSelfCollide, onWall, onBeetleTouch)
+   *    reduce(name, v, ctx)  pass a value through  (brakeMax, brakeRefill, brakeBonus, foodCount, floorTarget)
+   *    first(name, ctx)      first non-null answer (onSelfCollide, onWall, onWallHit, onBeetleTouch, freezeBeetles)
    * ==================================================================== */
   const Hooks = {
     *each(name) {
@@ -541,14 +560,15 @@ body { margin: 0; }
       mode, phase: 'ready',
       rng: mode === 'run' ? mulberry32((run.rng() * 4294967296) >>> 0) : mulberry32(newSeed()),
       snake: Array.from({ length: len }, (_, i) => [7 - i, 8]),
-      dir: 'right', queue: [], food: null, foodGolden: false, foodTtl: 0, exit: null, eaten: 0, score: 0, acc: 0, phaseAt: 0,
-      stepCount: 0, growPending: 0, lastEatStep: -1, combo: 0, leanSkip: false, charges: { phase: 0, armour: 0 },
+      // foods: [{ x, y, golden, ttl }] — usually one; Banquet raises the count
+      dir: 'right', queue: [], foods: [], exit: null, eaten: 0, score: 0, acc: 0, phaseAt: 0,
+      stepCount: 0, growPending: 0, lastEatStep: -1, leanSkip: false, charges: { phase: 0, armour: 0, burrow: 0 },
       walls: new Uint8Array(N * N), portals: new Map(), pairs: [], beetles: [], shrink: null, layoutName: '', cause: null,
     };
     game = g;
     if (mode === 'run') {
       const act = actOf(run.floor), fdef = FLOORS[run.floor - 1];
-      g.target = CFG.run.targets[act - 1];
+      g.target = Hooks.reduce('floorTarget', CFG.run.targets[act - 1]);
       g.stepMs = CFG.run.actStepMs[act - 1];
       const all = LAYOUTS[fdef.pool], fresh = all.filter(l => !run.usedLayouts.includes(l.name));
       const lay = pick(g.rng, fresh.length ? fresh : all);
@@ -570,7 +590,7 @@ body { margin: 0; }
   const beetleAt = (x, y) => game.beetles.find(b => b.x === x && b.y === y);
   function freeCells() {
     const taken = new Set(game.snake.map(([x, y]) => key(x, y)));
-    if (game.food) taken.add(key(...game.food));
+    for (const f of game.foods) taken.add(key(f.x, f.y));
     if (game.exit) taken.add(key(...game.exit));
     for (const b of game.beetles) taken.add(key(b.x, b.y));
     const warnRing = game.shrink && game.shrink.state === 'warn' ? game.shrink.ring : -1;
@@ -591,7 +611,11 @@ body { margin: 0; }
       if (!w) return { block: 'wall' };
       [nx, ny] = w;
     }
-    if (game.walls[ny * N + nx]) return { block: 'wall' };
+    if (game.walls[ny * N + nx]) {
+      const b = who === 'snake' ? Hooks.first('onWallHit', { x: nx, y: ny, dx, dy }) : null;
+      if (!b) return { block: 'wall' };
+      return { c: b, burrow: true };
+    }
     const p = game.portals.get(key(nx, ny));
     if (p) {
       nx = p[0] + dx; ny = p[1] + dy;
@@ -619,7 +643,7 @@ body { margin: 0; }
     if (i === 0) return 'head';
     if (i > 0) return 'body';
     if (game.beetles.some(o => o !== self && o.x === x && o.y === y)) return 'block';
-    if (game.food && game.food[0] === x && game.food[1] === y) return 'block';
+    if (foodAt(x, y)) return 'block';
     if (game.exit && game.exit[0] === x && game.exit[1] === y) return 'block';
     return null;
   }
@@ -637,10 +661,11 @@ body { margin: 0; }
     }
     return true;
   }
-  function squashBeetle(b, pts) {
+  function squashBeetle(b, count) {
     game.beetles.splice(game.beetles.indexOf(b), 1);
-    pts = Math.round(pts); run.score += pts;
-    FX.burst([b.x, b.y], 10); FX.popup([b.x, b.y], '+' + pts); Audio.squash();
+    run.score += CFG.run.foodPoints * actOf(run.floor) * CFG.mut.spikedMult;
+    FX.burst([b.x, b.y], 10); FX.popup([b.x, b.y], '+' + count); Audio.squash();
+    addEaten(count);
     screen.hud();
   }
 
@@ -668,33 +693,53 @@ body { margin: 0; }
       wallsDirty = true; FX.shake(0.6); Audio.shrink();
       if (game.snake.some(([x, y]) => ringOf(x, y) === s.ring)) { die(false, 'shrink'); return false; }
       game.beetles = game.beetles.filter(b => { if (ringOf(b.x, b.y) !== s.ring) return true; FX.burst([b.x, b.y], 4); return false; });
-      if (game.food && ringOf(...game.food) === s.ring) placeFood();
+      game.foods = game.foods.filter(f => ringOf(f.x, f.y) !== s.ring);
+      placeFood();
       if (game.exit && ringOf(...game.exit) === s.ring) { game.exit = null; openExit(); }
     }
     return true;
   }
+  const foodAt = (x, y) => game.foods.find(f => f.x === x && f.y === y);
+  // Top the board up to its food count (1, or more with Banquet).
   function placeFood() {
-    game.food = null; game.foodGolden = false; game.foodTtl = 0;
-    const free = freeCells(); game.food = free.length ? pick(game.rng, free) : null;
-    if (game.food && game.mode === 'run') Hooks.emit('onSpawnFood', game);
+    const want = game.mode === 'run' ? Hooks.reduce('foodCount', 1) : 1;
+    while (game.foods.length < want) {
+      const free = freeCells(); if (!free.length) return;
+      const [x, y] = pick(game.rng, free), f = { x, y, golden: false, ttl: 0 };
+      game.foods.push(f);
+      if (game.mode === 'run') Hooks.emit('onSpawnFood', f);
+    }
   }
   function cellFree(x, y) {
     if (!inBounds(x, y) || game.walls[y * N + x] || game.portals.has(key(x, y)) || beetleAt(x, y)) return false;
     if (game.exit && game.exit[0] === x && game.exit[1] === y) return false;
+    if (foodAt(x, y)) return false;
     return !game.snake.some(([a, b]) => a === x && b === y);
   }
   // Magnet: every few moves, food within range takes one step towards the head (never onto it).
   // Food that drifts into a portal comes out of its pair.
   function magnetPull(g, radius) {
-    if (!g.food || g.stepCount % CFG.mut.magnetEvery) return;
-    const [hx, hy] = g.snake[0], [fx, fy] = g.food, dx = hx - fx, dy = hy - fy, dist = Math.abs(dx) + Math.abs(dy);
-    if (dist > radius || dist <= 1) return;
-    const xs = [Math.sign(dx), 0], ys = [0, Math.sign(dy)];
-    for (const [mx, my] of Math.abs(dx) >= Math.abs(dy) ? [xs, ys] : [ys, xs]) {
-      if (!mx && !my) continue;
-      const mv = travel(fx, fy, [mx, my], 'food');
-      if (mv.c && cellFree(...mv.c)) { g.food = mv.c; return; }
+    if (g.stepCount % CFG.mut.magnetEvery) return;
+    const [hx, hy] = g.snake[0];
+    for (const f of g.foods) {
+      const dx = hx - f.x, dy = hy - f.y, dist = Math.abs(dx) + Math.abs(dy);
+      if (dist > radius || dist <= 1) continue;
+      const xs = [Math.sign(dx), 0], ys = [0, Math.sign(dy)];
+      for (const [mx, my] of Math.abs(dx) >= Math.abs(dy) ? [xs, ys] : [ys, xs]) {
+        if (!mx && !my) continue;
+        const mv = travel(f.x, f.y, [mx, my], 'food');
+        if (mv.c && cellFree(...mv.c)) { [f.x, f.y] = mv.c; break; }
+      }
     }
+  }
+  // Burrow: from the wall just hit, the first open tile beyond it in a straight line (null at the board edge).
+  function burrowExit({ x, y, dx, dy }) {
+    for (let i = 0; i <= CFG.mut.burrowDepth; i++) {
+      const nx = x + dx * i, ny = y + dy * i;
+      if (!inBounds(nx, ny)) return null;
+      if (!game.walls[ny * N + nx]) return game.portals.has(key(nx, ny)) ? null : [nx, ny];
+    }
+    return null;
   }
   function openExit() {
     const [hx, hy] = game.snake[0];
@@ -725,9 +770,10 @@ body { margin: 0; }
     if (mv.block) { die(false, 'wall'); return false; }
     const head = mv.c;
     if (mv.portal) Audio.portal();
+    if (mv.burrow) { FX.popup(head, 'BURROW'); FX.burst(head, 6); Audio.snap(); }
     if (beetleAt(...head)) { die(false, 'beetle'); return false; }
-    const eating = game.food && head[0] === game.food[0] && head[1] === game.food[1];
-    const tailStays = eating || game.growPending > 0;
+    const food = foodAt(...head);
+    const tailStays = !!food || game.growPending > 0;
     const body = tailStays ? game.snake : game.snake.slice(0, -1);
     const hit = body.findIndex(([x, y]) => x === head[0] && y === head[1]);
     if (hit >= 0) {
@@ -738,17 +784,18 @@ body { margin: 0; }
     }
     game.snake.unshift(head);
     if (game.exit && head[0] === game.exit[0] && head[1] === game.exit[1]) { game.snake.pop(); clearFloor(); return false; }
-    if (eating) {
-      const grow = eat();
+    if (food) {
+      const grow = eat(food);
       if (grow === 0) game.snake.pop(); else game.growPending += grow - 1;
       if (game.snake.length === N * N) { die(true); return false; }
     } else if (game.growPending > 0) game.growPending--;
     else game.snake.pop();
     if (game.mode === 'run') {
       Hooks.emit('onStep', game);
-      if (game.foodGolden && --game.foodTtl <= 0) { game.foodGolden = false; game.foodTtl = 0; }
+      for (const f of game.foods) if (f.golden && --f.ttl <= 0) { f.golden = false; f.ttl = 0; }
+      Brake.setBonus(Hooks.reduce('brakeBonus', 0, { len: game.snake.length }));
       showCharges();
-      if (game.beetles.length && game.stepCount % CFG.beetle.everySteps === 0 && !moveBeetles()) return false;
+      if (game.beetles.length && game.stepCount % CFG.beetle.everySteps === 0 && !Hooks.first('freezeBeetles') && !moveBeetles()) return false;
       if (!updateShrink()) return false;
     }
     return true;
@@ -761,25 +808,29 @@ body { margin: 0; }
     FX.popup(head, 'SNAP'); FX.shake(0.5); Audio.snap();
   }
 
+  // Count progress towards the floor target and open the exit when it's reached.
+  function addEaten(n) {
+    const before = game.eaten;
+    game.eaten += n;
+    if (before < game.target && game.eaten >= game.target) openExit();
+  }
+
   // Returns how many segments the snake grows by (0 = none).
-  function eat() {
-    const pos = game.food, golden = game.foodGolden;
+  function eat(food) {
+    const pos = [food.x, food.y], golden = food.golden;
+    game.foods.splice(game.foods.indexOf(food), 1);
     let grow = 1;
     if (game.mode === 'run') {
-      const base = CFG.run.foodPoints * actOf(run.floor) * (golden ? CFG.mut.goldenMult : 1);
-      let v = Hooks.reduce('foodValue', base, { braking: Brake.active(), len: game.snake.length - 1 });
-      v = Hooks.reduce('foodBonus', v, { base, gap: game.stepCount - game.lastEatStep });
-      v = Math.round(v);
+      // score is kept for the results screen only; progress is what counts
+      run.score += CFG.run.foodPoints * actOf(run.floor) * (golden ? CFG.mut.goldenMult : 1);
+      const info = { count: golden ? CFG.mut.goldenCount : 1, grow: 1, braking: Brake.active(),
+        gap: game.lastEatStep >= 0 ? game.stepCount - game.lastEatStep : Infinity, tags: [] };
       game.lastEatStep = game.stepCount;
-      const info = { count: 1, grow: 1 };
       Hooks.emit('onEat', info);
       grow = info.grow;
-      const before = game.eaten;
-      game.eaten += info.count;
-      run.score += v;
-      FX.popup(pos, '+' + v + (game.combo > 0 ? ' x' + (game.combo + 1) : ''));
+      if (info.count > 1 || info.tags.length) FX.popup(pos, [info.count > 1 ? '+' + info.count : ''].concat(info.tags).filter(Boolean).join(' '));
       placeFood();
-      if (before < game.target && game.eaten >= game.target) openExit();
+      addEaten(info.count);
     } else {
       game.score++;
       const c = CFG.classic;
@@ -796,6 +847,7 @@ body { margin: 0; }
     const parts = [];
     if (run && run.mutations.phase) parts.push('Phase ' + game.charges.phase);
     if (run && run.mutations.armoured) parts.push('Armour ' + game.charges.armour);
+    if (run && run.mutations.burrow) parts.push('Burrow ' + game.charges.burrow);
     const t = parts.join(' · ');
     if (t !== chargesShown) { chargesShown = t; $('charges').textContent = t; }
   }
@@ -829,8 +881,24 @@ body { margin: 0; }
    * BRAKE — hold-to-slow with a meter (Run mode only)
    * ==================================================================== */
   const Brake = {
-    held: false, meter: CFG.brake.maxMs, max: CFG.brake.maxMs, refillMs: CFG.brake.refillMs, exhausted: false, was: false, shown: -1,
-    reset(max, refillMs) { this.max = max; this.refillMs = refillMs; this.meter = max; this.exhausted = false; this.shown = -1; },
+    held: false, meter: CFG.brake.maxMs, max: CFG.brake.maxMs, baseMax: CFG.brake.maxMs, bonus: 0, refillMs: CFG.brake.refillMs, exhausted: false, was: false, shown: -1,
+    reset(max, refillMs) { this.baseMax = this.max = max; this.bonus = 0; this.refillMs = refillMs; this.meter = max; this.exhausted = false; this.shown = -1; },
+    // Battery: extra capacity from tail length. New capacity arrives full; lost capacity takes its charge with it.
+    setBonus(ms) {
+      if (ms === this.bonus) return;
+      const gained = ms - this.bonus;
+      this.bonus = ms; this.max = this.baseMax + ms;
+      this.meter = Math.max(0, Math.min(this.max, this.meter + gained));
+      if (gained > 0 && game) FX.popup(game.snake[0], 'BRAKE+');
+      this.shown = -1;
+    },
+    // Gourmet: top up by a fraction of capacity. Returns true if anything was added.
+    refill(frac) {
+      if (this.meter >= this.max) return false;
+      this.meter = Math.min(this.max, this.meter + this.max * frac);
+      if (this.exhausted && this.meter >= this.max * CFG.brake.resumeAt) this.exhausted = false;
+      return true;
+    },
     active() { return this.held && !this.exhausted && game && game.mode === 'run' && game.phase === 'playing'; },
     update(dt) {
       const b = CFG.brake;
@@ -968,6 +1036,8 @@ body { margin: 0; }
         const k = 0.3 + 0.06 * Math.sin(now / 160 + i * 1.7);
         if (i % 2) frameCell(x, y, k, 0.1); else block(x, y, k, C.px);
       }));
+      const frozen = !!Hooks.first('freezeBeetles');
+      if (frozen) ctx.globalAlpha = 0.55;   // Tremor: frozen beetles fade back
       for (const b of game.beetles) {
         // beetles: a round-ish body with legs that shuffle each move
         block(b.x, b.y, 0.26, C.px);
@@ -975,17 +1045,21 @@ body { margin: 0; }
         ctx.fillRect(X + o, Y + o, L, L); ctx.fillRect(X + cell - o - L, Y + o, L, L);
         ctx.fillRect(X + o, Y + cell - o - L, L, L); ctx.fillRect(X + cell - o - L, Y + cell - o - L, L, L);
       }
+      ctx.globalAlpha = 1;
       if (game.exit) {
         const on = game.phase === 'cleared' ? Math.floor(now / 80) % 2 === 0 : Math.floor(now / 300) % 2 === 0;
         frameCell(game.exit[0], game.exit[1], 0.06, 0.16);
         if (on) block(game.exit[0], game.exit[1], 0.34, C.px);
       }
-      if (game.food) {
-        const [fx, fy] = game.food;
-        if (game.foodGolden) {
-          // golden food: a ringed square that blinks as it's about to fade
-          if (!(game.foodTtl < 12 && Math.floor(now / 110) % 2)) { block(fx, fy, 0.12, C.px); block(fx, fy, 0.24, C.lcd); block(fx, fy, 0.36, C.px); }
-        } else block(fx, fy, 0.28, C.px);
+      for (const f of game.foods) {
+        if (f.golden) {
+          // golden food: a chunky plus sign (so it can't be mistaken for a portal) that blinks as it fades
+          if (!(f.ttl < 12 && Math.floor(now / 110) % 2)) {
+            const X = f.x * cell, Y = f.y * cell, a = cell * 0.14, w = cell * 0.26;
+            ctx.fillStyle = C.px;
+            ctx.fillRect(X + a, Y + (cell - w) / 2, cell - 2 * a, w); ctx.fillRect(X + (cell - w) / 2, Y + a, w, cell - 2 * a);
+          }
+        } else block(f.x, f.y, 0.28, C.px);
       }
       if (run && run.mutations.wrap && game.mode === 'run') {
         // Wraparound: a dash on every stretch of edge you can cross (both sides open)
@@ -1052,7 +1126,7 @@ body { margin: 0; }
         newBoard(d.mode);
         if (d.mode === 'run') {
           Brake.reset(Hooks.reduce('brakeMax', CFG.brake.maxMs), Hooks.reduce('brakeRefill', CFG.brake.refillMs));
-          this.hud = () => setHud([['Score', run.score], ['Floor', run.floor + '/' + CFG.run.floors], ['Food', Math.min(game.eaten, game.target) + '/' + game.target]]);
+          this.hud = () => setHud([['Floor', run.floor + '/' + CFG.run.floors], ['Act', actOf(run.floor)], ['Food', Math.min(game.eaten, game.target) + '/' + game.target]]);
           setUnder('meter'); chargesShown = null; showCharges();
           const act = actOf(run.floor);
           const lines = [];
@@ -1114,7 +1188,7 @@ body { margin: 0; }
       enter(d) {
         game.phase = 'over';
         this.opts = draftOptions();
-        this.hud = () => setHud([['Score', run.score], ['Next floor', (run.floor + 1) + '/' + CFG.run.floors]]);
+        this.hud = () => setHud([['Cleared', run.floor + '/' + CFG.run.floors], ['Mutations', Object.values(run.mutations).reduce((a, b) => a + b, 0)]]);
         this.hud();
         setUnder('Floor ' + d.cleared + ' clear +' + d.bonus + ' · keep it all run');
         showOverlay({
@@ -1144,7 +1218,7 @@ body { margin: 0; }
       enter(d) {
         game.phase = 'over';
         const st = save.stats;
-        this.hud = () => setHud([['Score', d.score], ['Best', st.bestRunScore]]);
+        this.hud = () => setHud([['Floor', d.floor + '/' + CFG.run.floors], ['Best floor', st.bestFloor]]);
         this.hud();
         setUnder('Runs ' + st.runs + ' · wins ' + st.wins);
         const why = CAUSES[run.cause];
@@ -1238,13 +1312,13 @@ body { margin: 0; }
   requestAnimationFrame(frame);
 
   // test hook (harmless in production)
-  window.__snake = { get game() { return game; }, get run() { return run; }, get screen() { return screenName; }, get opts() { return screen.opts; }, save, Brake, setScreen, MUT, draftOptions, step, LAYOUTS, FLOORS, parseLayout, moveBeetles };
+  window.__snake = { get game() { return game; }, get run() { return run; }, get screen() { return screenName; }, get opts() { return screen.opts; }, save, Brake, setScreen, MUT, draftOptions, step, LAYOUTS, FLOORS, parseLayout, moveBeetles, placeFood, Hooks };
 })();
 </script>
 
 <script>
 // Offline support + update banner
-const APP_VERSION = '9';
+const APP_VERSION = '10';
 document.getElementById('ver').textContent = APP_VERSION;
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', async () => {
