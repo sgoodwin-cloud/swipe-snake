@@ -2,7 +2,7 @@
 
 The single source of truth for Swipe Snake: what the game is, how the code is laid out, how releases work, and what's planned. Update this file whenever a decision is made or a milestone moves, so any new chat session can pick up from here.
 
-_Last updated: 18 Oct 2026 · Current release: v10 (mutation pool reworked for run completion) on `main` · Next: play-test v10, then Milestone 4_
+_Last updated: 21 Oct 2026 · Current release: v11 (update fixes from Pocket Factory) on `main` · Next: play-test v10's mutation pool, then Milestone 4_
 
 ---
 
@@ -442,6 +442,7 @@ Each milestone is a playable release. Tick items as they're done and note the ve
 | 18 Oct 2026 | v10: added Banquet (more food at once), Shortcut (lower targets), Burrow (tunnel through walls, not the edge), Tremor (beetles freeze while braking). Thick Skin, Homing and a survive-a-death mutation held back as too strong for now; survive-a-death is a Rare candidate for M5 |
 | 18 Oct 2026 | v10: golden food drawn as a plus sign so it can't be confused with portals |
 | 15 Oct 2026 | M2 play-tested: works as expected. Mutations feel very strong (Phase + Armoured + Wraparound is near-invincible on open boards), but balance is deferred to M6 until the M3–M5 threats exist to balance against |
+| 21 Oct 2026 | v11: update fixes from Pocket Factory. The update banner is now a strip above the game (it was a floating button near the home bar, which iPhone could make untappable), and updates fetch each file at `?v=<VERSION>` and check `APP_VERSION` before installing, so GitHub Pages' CDN can't hand an update stale files |
 
 ---
 

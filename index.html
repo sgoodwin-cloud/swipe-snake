@@ -113,18 +113,22 @@ canvas { display: block; width: 100%; height: 100%; border-radius: 3px; }
 
 html { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); box-sizing: border-box; }
 body { margin: 0; }
+/* The page is a column: the update bar (when shown) above the game, which fills the rest. */
+body { display: flex; flex-direction: column; box-sizing: border-box; }
+.app { height: auto; flex: 1; min-height: 0; width: 100%; }
 #update {
-  position: fixed; left: 50%; transform: translateX(-50%);
-  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  flex: none; display: block; width: 100%; max-width: 520px; margin: 8px auto 0; min-height: 48px;
   background: var(--lcd); color: var(--pixel);
   font-family: var(--f-display); font-size: 13px; letter-spacing: .06em;
-  border: 0; border-radius: 6px; padding: 12px 18px; cursor: pointer;
+  border: 0; border-radius: 6px; padding: 12px 18px; cursor: pointer; touch-action: manipulation;
 }
 .ver { text-align: center; font-size: 15px; color: var(--muted); margin: 0; opacity: .7; }
 </style>
 
 </head>
 <body>
+<!-- Update bar: in the page flow above the game, never floating, so nothing overlaps it on iPhone -->
+<button id="update" hidden>Update ready · tap to update</button>
 <div class="app">
   <div class="top" id="hud"></div>
   <div class="bezel">
@@ -142,9 +146,8 @@ body { margin: 0; }
     <div class="meter" id="meter" hidden><span>Brake</span><div class="segs" id="segs"></div><span class="charges" id="charges"></span></div>
     <p class="hint" id="hint">Swipe to steer · hold to brake</p>
   </div>
-  <p class="ver">v<span id="ver">10</span></p>
+  <p class="ver">v<span id="ver">11</span></p>
 </div>
-<button id="update" hidden>Update ready · tap to reload</button>
 
 <script>
 (() => {
@@ -1318,7 +1321,7 @@ body { margin: 0; }
 
 <script>
 // Offline support + update banner
-const APP_VERSION = '10';
+const APP_VERSION = '11';
 document.getElementById('ver').textContent = APP_VERSION;
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', async () => {
@@ -1332,6 +1335,8 @@ if ('serviceWorker' in navigator) {
       // to fire controllerchange), so we listen for 'activated' too and only use a timer as a last resort.
       const show = w => {
         btn.hidden = false;
+        document.body.classList.add('has-update');
+        window.dispatchEvent(new Event('resize'));
         btn.onclick = () => {
           const nw = reg.waiting || w;
           btn.textContent = 'Updating…'; btn.disabled = true;
