@@ -146,7 +146,7 @@ body { display: flex; flex-direction: column; box-sizing: border-box; }
     <div class="meter" id="meter" hidden><span>Brake</span><div class="segs" id="segs"></div><span class="charges" id="charges"></span></div>
     <p class="hint" id="hint">Swipe to steer · hold to brake</p>
   </div>
-  <p class="ver">v<span id="ver">11</span></p>
+  <p class="ver">v<span id="ver">12</span></p>
 </div>
 
 <script>
@@ -1321,7 +1321,7 @@ body { display: flex; flex-direction: column; box-sizing: border-box; }
 
 <script>
 // Offline support + update banner
-const APP_VERSION = '11';
+const APP_VERSION = '12';
 document.getElementById('ver').textContent = APP_VERSION;
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', async () => {
